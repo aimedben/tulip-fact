@@ -188,8 +188,8 @@ export function HistoryPage() {
   return (
     <>
       <PageHeader
-        title="Historique & exports"
-        subtitle="Retrouvez les factures traitées, filtrez par statut, fournisseur ou période, et téléchargez les fichiers générés."
+        title="Historique"
+        subtitle="Retrouvez toutes les factures ajoutées et leur état."
         actions={
           <>
             {selectedIds.length > 0 && (
@@ -214,7 +214,7 @@ export function HistoryPage() {
           Factures {data ? <span className="tab-count">{data.total}</span> : null}
         </button>
         <button type="button" className={`tab${tab === "exports" ? " active" : ""}`} onClick={() => setTab("exports")}>
-          Exports {exportsList ? <span className="tab-count">{exportsList.length}</span> : null}
+          Envois dans Tulip {exportsList ? <span className="tab-count">{exportsList.length}</span> : null}
         </button>
       </div>
 
@@ -410,8 +410,8 @@ export function HistoryPage() {
         </>
       ) : (
         <Panel
-          title="Fichiers exportés"
-          subtitle="CSV, Excel, JSON et rapports de contrôle générés localement."
+          title="Envois dans Tulip"
+          subtitle="Factures enregistrées dans la base Tulip."
           actions={
             <button
               type="button"
@@ -438,8 +438,8 @@ export function HistoryPage() {
           ) : !exportsList || exportsList.length === 0 ? (
             <EmptyState
               icon="download"
-              title="Aucun export"
-              description="Validez une facture puis générez un export depuis sa fiche pour le retrouver ici."
+              title="Aucun envoi"
+              description="Les factures validées apparaissent ici."
             />
           ) : (
             <div className="table-wrap">
@@ -479,10 +479,6 @@ export function HistoryPage() {
               </table>
             </div>
           )}
-          <div className="panel-padded muted tiny">
-            Le format d'import direct de Tulip Gestion commerciale n'étant pas confirmé, ces fichiers doivent être contrôlés
-            avant toute utilisation.
-          </div>
         </Panel>
       )}
 

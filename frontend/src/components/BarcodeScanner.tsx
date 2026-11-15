@@ -80,7 +80,7 @@ export function BarcodeScanner({ isOpen, onClose, onScan }: BarcodeScannerProps)
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Scanner un code-barre">
+    <Modal open={isOpen} onClose={handleClose} title="Scanner un code-barre">
       <div className="barcode-scanner-modal">
         <div className="scanner-instructions">
           <Icon name="search" size={20} />

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ...database import get_db
 from ...models import Product, Supplier
 from ...normalization import name_key
+from ..matching.products import invalidate_catalog_cache
 from .catalog import TulipCatalog
 
 
@@ -41,6 +42,10 @@ def sync_suppliers(db: Session, catalog: TulipCatalog | None = None, page_size: 
             supplier.phone = item.get("phone") or supplier.phone
             supplier.email = item.get("email") or supplier.email
             supplier.address = item.get("address") or supplier.address
+            supplier.city = item.get("city") or supplier.city
+            tax_ids = item.get("tax_ids") or {}
+            supplier.mf = tax_ids.get("mf") or supplier.mf
+            supplier.nis = tax_ids.get("nis") or supplier.nis
             marker = item.get("code")
             notes = "Code principal Tulip: " + marker if marker and marker != code else None
             if notes and not supplier.notes:
@@ -83,7 +88,20 @@ def sync_products(db: Session, catalog: TulipCatalog | None = None, page_size: i
             if not code:
                 continue
             designation = item["designation"] or code
-            product = db.scalar(select(Product).where(Product.tulip_code == code))
+            internal = item.get("tulip_id") or item.get("id")
+            ref = item.get("ref") or ""
+            product = None
+            if internal is not None and str(internal) != str(code):
+                # Un article créé ici porte son code numérique Tulip (« 12445 »),
+                # pas le REF du listing Tulip (« ART12445 ») : le code interne
+                # est donc l'identité la plus fiable, cherchée en premier.
+                product = db.scalar(
+                    select(Product).where(Product.tulip_code == str(internal))
+                )
+            if product is None:
+                product = db.scalar(select(Product).where(Product.tulip_code == code))
+            if product is None and ref and ref != code:
+                product = db.scalar(select(Product).where(Product.reference == ref))
             if product is None:
                 product = Product(
                     tulip_code=code,
@@ -98,6 +116,7 @@ def sync_products(db: Session, catalog: TulipCatalog | None = None, page_size: i
                     product.designation = designation[:255]
                     product.normalized_designation = name_key(designation)
                 updated += 1
+            product.reference = item.get("reference") or item.get("ref") or product.reference
             product.supplier_ref = item.get("supplier_ref") or product.supplier_ref
             product.barcode = item.get("barcode") or product.barcode
             product.stock_unit = item.get("stock_unit") or product.stock_unit
@@ -107,6 +126,7 @@ def sync_products(db: Session, catalog: TulipCatalog | None = None, page_size: i
                 product.default_vat_rate = Decimal(str(vat))
             total_seen += 1
         db.commit()
+        invalidate_catalog_cache()
         if page * page_size >= result["total"]:
             break
         page += 1

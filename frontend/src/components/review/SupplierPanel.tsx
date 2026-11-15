@@ -133,14 +133,17 @@ export function SupplierPanel({
 
   const SupplierSelect = (
     <label className="field supplier-select-field">
-      <span>Fournisseur (liste Tulip / référentiel)</span>
+      <span>📋 Sélectionner un fournisseur existant</span>
       <select value={selection} onChange={(event) => onPick(event.target.value)} disabled={readOnly || confirming !== null}>
-        <option value="">➕ Ajouter un fournisseur…</option>
-        {dropdown.map((supplier) => (
-          <option key={supplier.id} value={supplier.id}>
-            {supplier.name} — {supplier.code}
-          </option>
-        ))}
+        <option value="">— Choisir un fournisseur du référentiel —</option>
+        <option value="NEW" style={{ fontWeight: "bold" }}>➕ Créer un nouveau fournisseur</option>
+        <optgroup label="Fournisseurs disponibles">
+          {dropdown.map((supplier) => (
+            <option key={supplier.id} value={supplier.id}>
+              {supplier.name} — {supplier.code}
+            </option>
+          ))}
+        </optgroup>
       </select>
     </label>
   );
@@ -178,11 +181,18 @@ export function SupplierPanel({
           <h2>Fournisseur</h2>
           <p className="muted small">Rapprochement avec le référentiel Tulip</p>
         </div>
-        {!readOnly && detail.supplier && (
-          <button type="button" className="button button-sm" onClick={() => setOpen(true)}>
-            Changer
-          </button>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          {!detail.supplier && (
+            <span className="status-badge tone-danger">
+              <Icon name="alert-triangle" size={13} /> Requis pour validation
+            </span>
+          )}
+          {!readOnly && detail.supplier && (
+            <button type="button" className="button button-sm" onClick={() => setOpen(true)}>
+              Changer
+            </button>
+          )}
+        </div>
       </header>
       <div className="panel-body">
         {detail.supplier ? (
@@ -206,14 +216,17 @@ export function SupplierPanel({
           </div>
         ) : (
           <>
-            <div className="supplier-card unconfirmed">
-              <span className="supplier-icon">
-                <Icon name="alert" size={20} />
+            <div className="supplier-card unconfirmed" style={{ borderColor: "var(--color-danger)", backgroundColor: "var(--color-danger-bg)" }}>
+              <span className="supplier-icon" style={{ color: "var(--color-danger)" }}>
+                <Icon name="alert-triangle" size={20} />
               </span>
               <div>
-                <strong>Aucun fournisseur confirmé</strong>
+                <strong style={{ color: "var(--color-danger)" }}>⚠ Fournisseur requis pour validation</strong>
                 <div className="muted small">
                   {detail.supplier_name_raw ? `Mention lue : « ${detail.supplier_name_raw} »` : "Aucun nom détecté sur le document."}
+                </div>
+                <div className="muted small" style={{ marginTop: "0.25rem" }}>
+                  👉 Sélectionnez un fournisseur ci-dessous ou créez-en un nouveau.
                 </div>
               </div>
             </div>

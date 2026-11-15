@@ -30,8 +30,9 @@ def build_be_from_invoice(
       NBC = n° bon de commande (sinon n° facture), LIVFACT = n° BL (sinon n° facture),
       DATEFACT = date facture, DETTE est déclenché par le writer à l'écriture.
     - DETAILSBR : PRODUIT = code produit Tulip négatif, QTE/PUHT/TVA/REMISE
-      depuis les lignes rapprochées ; MQX/TVA/defaults non renseignés sont
-      repris de PRODUITS par DETAILSBR_BI (comportement Tulip).
+      depuis les lignes rapprochées ; MPRIX = prix de vente saisi sur la ligne
+      (ou prix producteur par défaut non forcé). MQX/TVA/defaults non renseignés
+      sont repris de PRODUITS par DETAILS_BR_BI (comportement Tulip).
     """
     issues: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -109,6 +110,9 @@ def build_be_from_invoice(
                 unit_price_ht=line.unit_price_ht if line.unit_price_ht is not None else Decimal("0"),
                 remise=discount,
                 remise_type=remise_type,
+                # Prix de vente saisi sur la ligne (saisie manuelle prioritaire) :
+                # écrit dans DETAILSBR.MPRIX du BE Tulip.
+                mprix=line.prix_vente,
                 tva=line.vat_rate,
             )
         )

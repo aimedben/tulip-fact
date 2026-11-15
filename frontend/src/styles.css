@@ -273,6 +273,72 @@ textarea {
   opacity: 0.9;
 }
 
+.sync-section {
+  margin: 12px 8px 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--sidebar-line);
+}
+
+.sync-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: rgba(20, 184, 166, 0.12);
+  color: #5eead4;
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sync-button:hover:not(:disabled) {
+  background: rgba(20, 184, 166, 0.18);
+  border-color: rgba(45, 212, 191, 0.35);
+  transform: translateY(-1px);
+}
+
+.sync-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.sync-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sync-button svg {
+  flex-shrink: 0;
+}
+
+.sync-button:disabled svg {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sync-status {
+  margin-top: 8px;
+  text-align: center;
+}
+
+.sync-status small {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
 .sidebar-footer {
   margin-top: auto;
   border-top: 1px solid var(--sidebar-line);
@@ -375,6 +441,60 @@ textarea {
   display: flex;
   align-items: center;
   gap: 9px;
+}
+
+/* QR code d'accès téléphone dans la barre du haut */
+.qr-access {
+  position: relative;
+  display: inline-flex;
+}
+
+.qr-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  display: grid;
+  gap: 10px;
+  width: 240px;
+  max-width: calc(100vw - 24px);
+  padding: 14px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.16);
+  z-index: 60;
+}
+
+.qr-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.qr-popover-frame {
+  padding: 8px;
+}
+
+.qr-popover-frame img {
+  width: 168px;
+  height: 168px;
+}
+
+.qr-popover-url {
+  margin: 0;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+.qr-popover-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.qr-popover-actions .button {
+  text-decoration: none;
 }
 
 .mode-chip {
@@ -1236,6 +1356,10 @@ textarea {
   max-width: 620px;
 }
 
+.barcode-scan-row {
+  margin-bottom: 10px;
+}
+
 .search-input {
   display: flex;
   align-items: center;
@@ -1907,12 +2031,43 @@ textarea {
   padding-top: 4px;
 }
 
-.review-grid {
+.reprocess-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reprocess-control select {
+  height: 36px;
+  max-width: 155px;
+  padding: 0 26px 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+
+.reprocess-control select:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.review-top-split {
   display: grid;
-  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   gap: 16px;
   align-items: start;
   margin-bottom: 16px;
+}
+
+.review-top-split .viewer-panel {
+  position: sticky;
+  top: 70px;
+  max-height: calc(100vh - 88px);
 }
 
 .viewer-panel {
@@ -1950,6 +2105,16 @@ textarea {
   gap: 2px;
 }
 
+.viewer-pan-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-left: 1px solid var(--line);
+  padding-left: 8px;
+}
+
 .zoom-label {
   min-width: 42px;
   text-align: center;
@@ -1971,7 +2136,7 @@ textarea {
   min-height: 320px;
   max-height: 620px;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
 }
 
@@ -1981,9 +2146,13 @@ textarea {
   min-width: 220px;
   background: #fff;
   box-shadow: 0 3px 16px rgba(16, 24, 40, 0.16);
+  transform-origin: center center;
   transition: width 0.15s ease, transform 0.2s ease;
-  transform-origin: center top;
   align-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  contain: layout style paint;
 }
 
 .page-stage img {
@@ -2053,7 +2222,7 @@ textarea {
 
 .review-bottom {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.85fr) minmax(240px, 0.9fr);
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.9fr);
   gap: 16px;
   align-items: start;
   margin-bottom: 16px;
@@ -3266,7 +3435,7 @@ textarea {
 /* ---------- Responsive ---------- */
 
 @media (max-width: 1320px) {
-  .review-grid {
+  .review-top-split {
     grid-template-columns: 1fr;
   }
 
@@ -3742,3 +3911,451 @@ width: 100%; }
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ---------- Validation visuelle des champs (bordures verte/rouge) ---------- */
+
+.field input.field-error,
+.field select.field-error,
+.field textarea.field-error,
+.field.field-error input,
+.field.field-error select,
+.field.field-error textarea,
+.cell-input.field-error,
+.cell-input.mono.field-error {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.field input.field-error:focus,
+.field select.field-error:focus,
+.field textarea.field-error:focus,
+.field.field-error input:focus,
+.field.field-error select:focus,
+.field.field-error textarea:focus,
+.cell-input.field-error:focus {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgba(180, 35, 24, 0.12);
+}
+
+.field input.field-ok,
+.field select.field-ok,
+.field textarea.field-ok,
+.field.field-ok input,
+.field.field-ok select,
+.field.field-ok textarea,
+.cell-input.field-ok,
+.cell-input.mono.field-ok {
+  border-color: var(--success-line);
+  background: var(--success-soft);
+}
+
+.field input.field-ok:focus,
+.field select.field-ok:focus,
+.field textarea.field-ok:focus,
+.field.field-ok input:focus,
+.field.field-ok select:focus,
+.field.field-ok textarea:focus,
+.cell-input.field-ok:focus {
+  border-color: var(--success);
+  box-shadow: 0 0 0 3px rgba(6, 118, 71, 0.1);
+}
+
+.field input:disabled.field-error,
+.field.field-error input:disabled,
+.field.field-ok input:disabled,
+.field input:disabled.field-ok {
+  background: var(--surface-2);
+}
+
+/* Légende des statuts de champ */
+.field-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 10.5px;
+  color: #667085;
+  align-items: center;
+}
+
+.field-legend .legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  display: inline-block;
+  border: 1px solid;
+}
+
+.legend-swatch.danger {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.legend-swatch.success {
+  border-color: var(--success-line);
+  background: var(--success-soft);
+}
+
+/* ---------- Résumé compact des contrôles ---------- */
+
+.checks-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.checks-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.checks-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.checks-chip.success {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-line);
+}
+
+.checks-chip.danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-line);
+}
+
+.checks-chip.warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-line);
+}
+
+/* ---------- Autocomplétion produit ---------- */
+
+.product-autocomplete {
+  position: relative;
+  min-width: 0;
+}
+
+.product-autocomplete > input {
+  width: 100%;
+}
+
+.product-suggestions-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  min-width: 260px;
+  width: max(300px, 100%);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.16);
+  z-index: 1200;
+  max-height: 264px;
+  overflow-y: auto;
+}
+
+.product-suggestion-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.product-suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.product-suggestion-item .product-suggestion-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.product-suggestion-item .product-suggestion-main strong {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-suggestion-item:hover,
+.product-suggestion-item.active {
+  background: var(--accent-soft);
+}
+
+.product-suggestion-item:has(.product-suggestion-main:hover) {
+  background: var(--accent-soft);
+}
+
+.product-suggestion-side {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+  color: #98a2b3;
+  flex-shrink: 0;
+}
+
+.product-suggestion-note {
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #667085;
+}
+
+/* ============================================================
+   Confort senior — une action principale par écran,
+   texte lisible, boutons et champs larges.
+   ============================================================ */
+
+:root {
+  font-size: 17px;
+}
+
+body {
+  font-size: 17px;
+  line-height: 1.55;
+}
+
+h1 {
+  font-size: 30px;
+}
+
+h2 {
+  font-size: 22px;
+}
+
+h3 {
+  font-size: 18px;
+}
+
+p,
+li,
+label,
+span,
+td,
+th,
+input,
+select,
+textarea,
+button {
+  font-size: inherit;
+}
+
+.muted,
+.small {
+  font-size: 15px;
+}
+
+.tiny {
+  font-size: 14px;
+}
+
+/* Boutons : hauteur confortable, libellé net. */
+.button,
+.sync-button,
+.text-link {
+  min-height: 48px;
+  padding: 12px 22px;
+  font-size: 17px;
+  font-weight: 600;
+  border-radius: 10px;
+}
+
+.button-sm {
+  min-height: 40px;
+  padding: 9px 16px;
+  font-size: 16px;
+}
+
+.button-primary {
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(15, 118, 110, 0.25);
+}
+
+.icon-button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* Champs : gros, lisibles, focus visible. */
+.field input,
+.field select,
+.field textarea,
+.search-input input,
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="date"],
+select,
+textarea {
+  min-height: 48px;
+  padding: 12px 14px;
+  font-size: 17px;
+  border-radius: 10px;
+}
+
+textarea {
+  min-height: 96px;
+}
+
+.field > span,
+.field > label,
+.label {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.search-input {
+  min-height: 48px;
+}
+
+.search-input input {
+  border: 0;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Navigation : cibles larges, libellé franc. */
+.nav-item {
+  min-height: 46px;
+  padding: 12px 14px;
+  font-size: 17px;
+  font-weight: 500;
+  border-radius: 10px;
+}
+
+.nav-label {
+  font-size: 14px;
+  letter-spacing: 0.08em;
+}
+
+/* Tableaux : lisibles sans effort. */
+.data-table th {
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.data-table td {
+  font-size: 16px;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.status-badge,
+.format-chip,
+.chip,
+.tulip-chip,
+.mode-chip {
+  font-size: 14px;
+  padding: 5px 10px;
+  border-radius: 999px;
+}
+
+/* Titres de page et panneaux. */
+.page-header h1,
+.page-title {
+  font-size: 30px;
+  letter-spacing: -0.02em;
+}
+
+.page-header p,
+.page-subtitle {
+  font-size: 17px;
+}
+
+.panel-header h2 {
+  font-size: 21px;
+}
+
+/* Bandeau Tulip : vert quand tout va bien, rouge sinon. */
+.tulip-chip.connected {
+  background: var(--success-soft);
+  color: var(--success);
+  border: 1px solid var(--success-line);
+  font-weight: 700;
+}
+
+.tulip-chip.offline {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid var(--danger-line);
+  font-weight: 700;
+}
+
+/* Messages et bandeaux plus lisibles. */
+.banner {
+  font-size: 17px;
+  padding: 16px 18px;
+  border-radius: 12px;
+}
+
+.banner strong {
+  font-size: 18px;
+}
+
+.inline-error {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.modal-footer .button,
+.modal-actions .button {
+  min-width: 140px;
+}
+
+/* Une seule action dominante : le bouton principal est plus grand. */
+.button-primary {
+  min-height: 52px;
+  padding: 14px 26px;
+  font-size: 18px;
+}
+
+@media (max-width: 760px) {
+  :root {
+    font-size: 16px;
+  }
+
+  .button,
+  .button-primary {
+    width: 100%;
+  }
+}
+
+

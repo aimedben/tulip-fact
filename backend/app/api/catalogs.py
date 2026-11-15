@@ -10,9 +10,15 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import ImportBatch, Product, Supplier
-from ..normalization import name_key
+from ..normalization import name_key, normalize_reference
 from ..schemas import ProductCreate, ProductUpdate, SupplierCreate, SupplierUpdate
 from ..services.catalog_import import ImportFormatError, import_products, import_suppliers
+from ..services.catalog_codes import (
+    next_local_product_code,
+    next_local_supplier_code,
+    tulip_write_available,
+)
+from ..services.matching.products import invalidate_catalog_cache
 from ..services.matching.suppliers import find_supplier_candidates
 from ..services.storage import sanitize_filename
 from .serializers import product_payload, supplier_payload
@@ -56,10 +62,68 @@ def list_suppliers(
 
 @router.post("/suppliers", status_code=201)
 def create_supplier(payload: SupplierCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
-    if db.scalar(select(Supplier).where(Supplier.code == payload.code)):
+    """Crée d'abord le fournisseur dans Tulip (CLIENTS), puis localement.
+
+    Si l'écriture Tulip échoue, rien n'est créé : le commerçant ne peut jamais
+    croire qu'un fournisseur existe alors qu'il est absent de son logiciel.
+    """
+    from ..services.tulip.firebird import FirebirdError
+    from ..services.tulip.supplier_writer import SupplierWriter
+
+    writer = SupplierWriter()
+    tulip_available = tulip_write_available(writer)
+    code = (payload.code or "").strip()
+    if not code:
+        if tulip_available:
+            try:
+                code = writer.next_principal()
+            except FirebirdError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Impossible de préparer le code Tulip : {exc}",
+                ) from exc
+        else:
+            code = next_local_supplier_code(db)
+    if db.scalar(select(Supplier).where(Supplier.code == code)):
         raise HTTPException(status_code=409, detail="Un fournisseur avec ce code existe déjà.")
+
+    if tulip_available:
+        try:
+            tulip = writer.create_supplier(
+                name=payload.name,
+                principal=code,
+                address=payload.address,
+                city=payload.city,
+                tel=payload.phone,
+                email=payload.email,
+                nrc=payload.tax_id,
+                mf=payload.mf,
+                nis=payload.nis,
+                dry_run=False,
+            )
+        except FirebirdError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Rien n'a été créé : l'enregistrement dans Tulip a échoué. "
+                    f"Détail : {exc}"
+                ),
+            ) from exc
+        tulip_push: dict[str, Any] = {
+            "pushed": True,
+            "table": "CLIENTS",
+            "code": tulip.get("code"),
+            "principal": tulip.get("principal"),
+        }
+    else:
+        tulip_push = {
+            "pushed": False,
+            "skipped": True,
+            "reason": "Tulip n'est pas activé sur ce poste : fiche enregistrée uniquement dans l'application.",
+        }
+
     supplier = Supplier(
-        code=payload.code,
+        code=code,
         name=payload.name,
         normalized_name=name_key(payload.name),
         name_variants=payload.name_variants,
@@ -67,12 +131,15 @@ def create_supplier(payload: SupplierCreate, db: Session = Depends(get_db)) -> d
         phone=payload.phone,
         email=payload.email,
         address=payload.address,
+        city=payload.city,
+        mf=payload.mf,
+        nis=payload.nis,
         notes=payload.notes,
     )
     db.add(supplier)
     db.commit()
     db.refresh(supplier)
-    return supplier_payload(supplier)
+    return {**supplier_payload(supplier), "tulip_push": tulip_push}
 
 
 @router.patch("/suppliers/{supplier_id}")
@@ -117,6 +184,7 @@ def list_products(
         needle = f"%{q.strip()}%"
         condition = or_(
             Product.tulip_code.ilike(needle),
+            Product.reference.ilike(needle),
             Product.designation.ilike(needle),
             Product.barcode.ilike(needle),
             Product.supplier_ref.ilike(needle),
@@ -135,10 +203,69 @@ def list_products(
 
 @router.post("/products", status_code=201)
 def create_product(payload: ProductCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
-    if db.scalar(select(Product).where(Product.tulip_code == payload.tulip_code)):
+    """Crée d'abord l'article dans Tulip (PRODUITS), puis localement.
+
+    Si l'écriture Tulip échoue, rien n'est créé dans l'application.
+    """
+    from ..services.tulip.firebird import FirebirdError
+    from ..services.tulip.product_writer import ProductWriter
+
+    writer = ProductWriter()
+    tulip_available = tulip_write_available(writer)
+    code = (payload.tulip_code or "").strip()
+    if not code:
+        if tulip_available:
+            try:
+                code = writer.next_code()
+            except FirebirdError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Impossible de préparer le code Tulip : {exc}",
+                ) from exc
+        else:
+            code = next_local_product_code(db)
+    if db.scalar(select(Product).where(Product.tulip_code == code)):
         raise HTTPException(status_code=409, detail="Un article avec ce code Tulip existe déjà.")
+
+    if tulip_available:
+        try:
+            tulip = writer.create_product(
+                code=code,
+                designation=payload.designation,
+                ref=payload.reference,
+                barcode=payload.barcode,
+                packaging=payload.packaging,
+                stock_unit=payload.stock_unit,
+                default_vat_rate=payload.default_vat_rate,
+                dry_run=False,
+            )
+        except FirebirdError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Rien n'a été créé : l'enregistrement dans Tulip a échoué. "
+                    f"Détail : {exc}"
+                ),
+            ) from exc
+        tulip_push: dict[str, Any] = {
+            "pushed": True,
+            "table": "PRODUITS",
+            "code": tulip.get("code"),
+            "designation": tulip.get("designation"),
+            "ref": tulip.get("ref"),
+        }
+        generated_ref = tulip.get("ref")
+    else:
+        tulip_push = {
+            "pushed": False,
+            "skipped": True,
+            "reason": "Tulip n'est pas activé sur ce poste : fiche enregistrée uniquement dans l'application.",
+        }
+        generated_ref = None
+
     product = Product(
-        tulip_code=payload.tulip_code,
+        tulip_code=code,
+        reference=(payload.reference or "").strip() or generated_ref,
         supplier_ref=payload.supplier_ref,
         barcode=payload.barcode,
         designation=payload.designation,
@@ -151,7 +278,8 @@ def create_product(payload: ProductCreate, db: Session = Depends(get_db)) -> dic
     db.add(product)
     db.commit()
     db.refresh(product)
-    return product_payload(product)
+    invalidate_catalog_cache()
+    return {**product_payload(product), "tulip_push": tulip_push}
 
 
 @router.patch("/products/{product_id}")
@@ -165,13 +293,47 @@ def update_product(product_id: int, payload: ProductUpdate, db: Session = Depend
         product.normalized_designation = name_key(payload.designation)
     db.commit()
     db.refresh(product)
+    invalidate_catalog_cache()
     return product_payload(product)
 
 
 @router.get("/products/barcode/{barcode}")
 def get_product_by_barcode(barcode: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Recherche un produit par son code-barre."""
-    product = db.scalar(select(Product).where(Product.barcode == barcode.strip()))
+    """Recherche un produit par scan (douchette) ou saisie : code-barres d'abord,
+    puis code Tulip ou référence fournisseur, pour toujours renvoyer le produit
+    s'il est présent dans le référentiel sous l'un de ses identifiants."""
+    cleaned = barcode.strip()
+    product = db.scalar(select(Product).where(Product.barcode == cleaned))
+    if product is None:
+        needle = normalize_reference(cleaned)
+        if needle:
+            products = db.scalars(select(Product).where(Product.barcode.is_not(None))).all()
+            product = next(
+                (item for item in products if normalize_reference(item.barcode) == needle),
+                None,
+            )
+    if product is None:
+        # Repli : le produit existe déjà mais sous un autre identifiant (code Tulip ou réf. fournisseur).
+        product = db.scalar(select(Product).where(Product.tulip_code == cleaned))
+        if product is None:
+            product = db.scalar(select(Product).where(Product.reference == cleaned))
+        if product is None:
+            product = db.scalar(select(Product).where(Product.supplier_ref == cleaned))
+        if product is None and needle:
+            product = db.scalar(select(Product).where(Product.tulip_code == needle))
+        if product is None and needle:
+            products = db.scalars(
+                select(Product).where(Product.supplier_ref.is_not(None))
+            ).all()
+            product = next(
+                (item for item in products if normalize_reference(item.supplier_ref) == needle),
+                None,
+            )
+        if product is not None and not (product.barcode or "").strip():
+            # Le produit apprend son code-barres : les prochains scans le renverront directement.
+            product.barcode = cleaned
+            db.commit()
+            db.refresh(product)
     if product is None:
         raise HTTPException(status_code=404, detail=f"Aucun produit trouvé avec le code-barre {barcode}")
     return product_payload(product)
@@ -180,6 +342,7 @@ def get_product_by_barcode(barcode: str, db: Session = Depends(get_db)) -> dict[
 @router.post("/products/import")
 async def upload_products(file: UploadFile = File(...), db: Session = Depends(get_db)) -> dict[str, Any]:
     batch = await _import_catalog(file, db, "products")
+    invalidate_catalog_cache()
     return _batch_payload(batch)
 
 

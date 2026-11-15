@@ -1,141 +1,121 @@
-# Guide d'Installation Portable - Tulip Factures
+# Tulip Factures — dossier portable (Windows 7, 8, 10, 11)
 
-## Installation sur Clé USB
+**Aucune installation. Aucun accès Internet. Tout est dans ce dossier.**
 
-### Prérequis sur le PC cible
-- Windows 10/11
-- Python 3.12 ou supérieur
-- Tesseract OCR 5.x avec langues française et anglaise
+Copiez le dossier entier sur le PC, double-cliquez, c'est tout. Il contient déjà
+Python 3.8 (32 bits), le serveur de l'application, l'interface, le moteur OCR et
+ses modèles, le client Firebird 2.5, les runtimes C/C++ et un navigateur Firefox
+portable. Rien n'est installé dans Windows, aucune clé de registre n'est écrite.
 
-### Étapes d'installation
+---
 
-1. **Copier les fichiers sur la clé USB**
-   - Copiez tout le dossier `tulip-factures` sur votre clé USB
-   - Assurez-vous d'avoir au moins 2 GB d'espace libre
+## 1. Prérequis
 
-2. **Installation automatique**
-   - Sur le PC cible, ouvrez PowerShell en tant qu'administrateur
-   - Naviguez vers la clé USB : `cd E:\tulip-factures` (remplacez E: par votre lettre de lecteur)
-   - Exécutez : `.\install.ps1`
-   - Pour une installation portable (reste sur la clé) : `.\install.ps1 -Portable`
-   - Pour choisir le dossier : `.\install.ps1 -InstallPath "C:\MesApplications\TulipFactures"`
+| Élément | Exigence |
+|---|---|
+| Windows | Windows 7 **SP1** ou plus récent (32 ou 64 bits) |
+| Espace disque | ~600 Mo |
+| Droits | Pouvoir écrire dans le dossier (évitez `C:\Program Files`) |
+| Internet | **inutile** |
+| Firebird | Le serveur Firebird du logiciel **Tulip/GCP** doit tourner sur le PC (port 3050) ou être joignable sur le réseau |
+| Base Tulip | Le fichier `.TFE` existant (ex. `SUPERETTE.TFE`) |
 
-3. **Configuration**
-   - Éditez le fichier `.env` pour personnaliser les chemins
-   - Important : Mettez à jour `TESSERACT_CMD` avec le chemin correct sur le PC cible
-   - Configurez `TULIP_FB_DATABASE` pour pointer vers votre base Tulip
+> L'application **ne crée jamais** de base Firebird. Elle se contente de lire et
+> d'écrire dans la base Tulip existante.
 
-4. **Démarrage**
-   - Double-cliquez sur le raccourci "Tulip Factures" créé sur le Bureau
-   - OU exécutez `.\demarrer.ps1` depuis le dossier d'installation
+---
 
-## Installation Manuelle
+## 2. Mise en route (3 étapes)
 
-Si le script automatique ne fonctionne pas :
+1. **Copier** le dossier complet sur le disque local, par exemple
+   `C:\TulipFactures` (pas dans `Program Files`, pas depuis une clé USB : c'est
+   plus lent et le dossier doit rester inscriptible).
 
-```powershell
-# 1. Créer l'environnement virtuel
-python -m venv .venv
+2. **Double-cliquer `1-REGLER-CONNEXION-TULIP.bat`**
+   - la fenêtre « Configuration de la connexion Tulip » s'ouvre ;
+   - elle détecte automatiquement la base `.TFE` et le client Firebird
+     embarqué (`firebird\bin\isql.exe`) ;
+   - si un champ reste vide, cliquez sur **Détecter automatiquement** : la base,
+     le client Firebird et le serveur sont recherchés sur ce PC **et sur le
+     réseau local** (aucun chemin à connaître) ;
+   - cliquez **Tester la connexion** : le moteur doit s'afficher (ex. `2.5.9`) ;
+   - cochez **Autoriser l'écriture dans Tulip** si nécessaire ;
+   - cliquez **Enregistrer** : la configuration est écrite dans `.env`.
 
-# 2. Activer l'environnement
-.\.venv\Scripts\Activate.ps1
+3. **Double-cliquer `TulipFactures.exe`**
+   - la fenêtre du lanceur affiche l'état de la liaison Tulip ;
+   - le tableau de bord s'ouvre dans le **Firefox portable** du dossier
+     (`navigateur\firefox.exe`) ;
+   - le bouton **Connexion Tulip…** permet de rouvrir la configuration à tout
+     moment.
 
-# 3. Installer les dépendances
-pip install -r backend\requirements.txt
+> Si la base ou `isql.exe` ne sont pas détectés, indiquez-les manuellement dans
+> la fenêtre de configuration (bouton **Parcourir**). Le client Firebird embarqué
+> est toujours proposé en premier.
 
-# 4. Copier la configuration
-Copy-Item .env.example .env
+---
 
-# 5. Éditer .env avec vos paramètres
+## 3. Ce qui est embarqué (et pourquoi)
 
-# 6. Compiler le frontend (optionnel, déjà compilé)
-cd frontend
-npm install
-npm run build
-cd ..
+| Composant | Fichier / dossier | Rôle |
+|---|---|---|
+| Python 3.8.10 32 bits | `python38.dll`, `TulipFactures.exe` | exécute l'application sans Python installé |
+| Runtime C universel (UCRT) | `ucrtbase.dll`, `api-ms-win-crt-*.dll` | Windows 7 sans KB2999226 ne l'a pas : il est fourni ici |
+| Runtime C++ | `MSVCP140.dll` (14.30), `VCRUNTIME140.dll` | version compatible Windows 7 |
+| Client Firebird 2.5 | `firebird\` (isql, fbclient, intl, assembly VC80) | joint la base Tulip sans installer Firebird |
+| Navigateur | `navigateur\` (Firefox ESR 115) | IE11 ne sait pas afficher l'interface |
+| OCR | `rapidocr_onnxruntime\models\*.onnx`, `tessdata\` | lecture des factures, 100 % hors ligne |
+| Interface | `backend\app\static\` | pages compilées, aucune ressource externe |
 
-# 7. Démarrer l'application
-cd backend
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
+Le dossier `firebird\` sert uniquement de **client** : le serveur Firebird reste
+celui de Tulip. Si le PC Tulip est ailleurs sur le réseau, mettez son adresse IP
+dans le champ **Serveur (hôte)** de la configuration.
 
-## Vérification de l'installation
+---
 
-1. Ouvrez http://127.0.0.1:8000 dans votre navigateur
-2. Allez dans Configuration (menu)
-3. Vérifiez que :
-   - ✓ OCR est disponible (langues fra et eng détectées)
-   - ✓ Base de données est accessible
-   - ✓ Stockage est inscriptible
+## 4. Accès depuis un téléphone (QR)
 
-## Sélection de la base de données Tulip
+- L'icône **QR** en haut du tableau de bord affiche l'adresse
+  `http://<ip-du-pc>:8000`.
+- Autorisez le port **8000** dans le pare-feu Windows (réseau privé).
+- Le téléphone doit être sur le **même réseau local** (pas d'Internet requis).
 
-1. Dans l'interface, allez dans **Configuration**
-2. Section **Base de données Firebird Tulip**
-3. Cliquez sur **Parcourir** pour sélectionner votre fichier `.TFE`
-4. Remplissez les autres champs :
-   - Hôte : `localhost` (ou IP du serveur Firebird)
-   - Port : `3050` (port par défaut)
-   - Utilisateur : `SYSDBA`
-   - Mot de passe : votre mot de passe Firebird
-   - Chemin isql.exe : `E:\zjob\firebird_2_5\bin\isql.exe` (selon votre installation)
-5. Cochez **Activer la connexion Firebird**
-6. Cliquez sur **Enregistrer la configuration**
+---
 
-⚠️ **Important** : Laissez "Autoriser l'écriture" DÉSACTIVÉ sauf pour des tests sur une copie de la base.
+## 5. Écriture dans Tulip
 
-## Sauvegarde et restauration
+La case **Autoriser l'écriture dans Tulip** autorise la modification de la base
+réelle (articles, fournisseurs, bons d'achat). Pour un premier essai, laissez-la
+décochée : l'application fonctionne en lecture seule.
 
-### Créer une sauvegarde
-1. Dans Configuration, section "Sauvegarde locale"
-2. Cliquez sur "Créer une sauvegarde"
-3. Téléchargez le fichier ZIP créé
-4. Conservez-le sur un support externe
+---
 
-### Restaurer une sauvegarde
-1. Arrêtez l'application
-2. Remplacez le dossier `data` par le contenu de votre sauvegarde
-3. Redémarrez l'application
+## 6. Dépannage
 
-## Désinstallation
+| Symptôme | Cause / solution |
+|---|---|
+| Page blanche dans le navigateur | Ne pas utiliser Internet Explorer 11. Utilisez le Firefox du dossier (ouvert automatiquement) |
+| « api-ms-win-crt-… introuvable » alors que le dossier semble complet | La copie est incomplète : recopiez **tout** le dossier, y compris `ucrtbase.dll` et les `api-ms-win-*.dll` à la racine |
+| « Connexion Firebird Tulip non configurée » | Relancez `1-REGLER-CONNEXION-TULIP.bat` et testez la connexion |
+| « Serveur Firebird injoignable » | Lancez le logiciel Tulip/GCP (son serveur Firebird), vérifiez l'hôte et le port 3050 |
+| « Utilisateur ou mot de passe refusé » | Identifiants Firebird (par défaut `SYSDBA` / `masterkey`) |
+| Le port 8000 est déjà utilisé | Fermez l'autre application, ou modifiez `TULIP_PORT` dans `.env` |
+| Le QR ne s'ouvre pas sur le téléphone | Pare-feu : autoriser le port 8000 en réseau privé |
 
-1. Arrêtez l'application
-2. Sauvegardez le dossier `data` si vous souhaitez conserver vos factures
-3. Supprimez le dossier d'installation
-4. Supprimez le raccourci du Bureau
+Un journal est écrit dans `data\launcher-error.log` en cas d'échec au démarrage.
 
-## Dépannage
+---
 
-### L'OCR ne fonctionne pas
-- Vérifiez que Tesseract est installé : `tesseract --version`
-- Vérifiez le chemin dans `.env` : `TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe`
-- Vérifiez que les langues sont installées dans `tessdata`
+## 7. Données et sauvegarde
 
-### La base Firebird n'est pas accessible
-- Vérifiez que le service Firebird est démarré
-- Vérifiez le chemin du fichier `.TFE` dans la configuration
-- Vérifiez que le client `isql.exe` est bien en 32 bits (fourni avec Tulip)
-- Testez la connexion manuellement avec `isql`
+- Vos factures importées sont dans `data\tulip_factures.db` (base SQLite locale).
+- Copiez le dossier `data\` pour sauvegarder ou transférer vos factures.
+- Pour repartir de zéro : arrêtez l'application, renommez `data\` en
+  `data-sauvegarde\`, puis **restaurez une copie de `data\tulip_factures.db`**
+  (l'application ne crée jamais de base : sans ce fichier elle affiche
+  « Base de données introuvable » et propose de relier une base existante).
 
-### Port 8000 déjà utilisé
-- Changez le port dans `.env` : `TULIP_PORT=8001`
-- Redémarrez l'application
-- Accédez à http://127.0.0.1:8001
+## 8. Désinstallation
 
-### Erreur de permission PowerShell
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-## Support
-
-- Documentation complète : `README.md`
-- Documentation technique : `docs/`
-- Exemples : `examples/`
-
-## Sécurité
-
-- L'application ne doit JAMAIS être exposée sur Internet
-- Utilisez uniquement sur `127.0.0.1` (localhost)
-- Les factures contiennent des données sensibles : protégez vos sauvegardes
-- N'activez l'écriture Firebird que sur une copie de test
+Arrêtez l'application, sauvegardez `data\` si besoin, puis supprimez le dossier.
+Rien d'autre n'a été installé sur le PC.

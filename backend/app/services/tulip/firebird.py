@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,16 @@ class FirebirdConfig:
 
     @classmethod
     def from_settings(cls) -> "FirebirdConfig":
+        isql_path = settings.tulip_fb_isql_path
+        firebird_home = settings.tulip_fb_home
+        # Client Firebird embarqué (dossier « firebird » livré avec l'application) :
+        # utilisé automatiquement si le chemin configuré est absent (autre PC,
+        # installation Tulip dans un autre dossier, etc.).
+        bundled_home = settings.project_root / "firebird"
+        bundled_isql = bundled_home / "bin" / "isql.exe"
+        if bundled_isql.is_file() and not Path(isql_path or "").is_file():
+            isql_path = str(bundled_isql)
+            firebird_home = str(bundled_home)
         return cls(
             enabled=settings.tulip_fb_enabled,
             host=settings.tulip_fb_host,
@@ -49,8 +60,8 @@ class FirebirdConfig:
             database=settings.tulip_fb_database,
             user=settings.tulip_fb_user,
             password=settings.tulip_fb_password,
-            isql_path=settings.tulip_fb_isql_path,
-            firebird_home=settings.tulip_fb_home,
+            isql_path=isql_path,
+            firebird_home=firebird_home,
             charset=settings.tulip_fb_charset,
             timeout=settings.tulip_fb_timeout,
             write_enabled=settings.tulip_fb_write_enabled,
@@ -154,6 +165,9 @@ class FirebirdIsql:
                 env=self._environment(),
                 cwd=str(Path(self.config.firebird_home) / "bin"),
                 timeout=self.config.timeout,
+                # Application sans console (exe « windowed ») : sans ce drapeau,
+                # chaque appel isql ouvre une fenêtre noire qui clignote.
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
         except subprocess.TimeoutExpired as exc:
             raise FirebirdError("Délai dépassé lors de la communication avec Firebird.") from exc

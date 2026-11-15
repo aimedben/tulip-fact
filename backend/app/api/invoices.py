@@ -32,7 +32,7 @@ from ..services.accounting import verify_invoice
 from ..services.audit import record_audit
 from ..services.duplicates import detect_duplicates, duplicate_warning
 from ..services.matching.products import confirm_product as confirm_line_product
-from ..services.matching.products import match_lines, suggest_products
+from ..services.matching.products import match_lines, suggest_products, invalidate_catalog_cache
 from ..services.matching.suppliers import confirm_supplier
 from ..services.storage import (
     StorageError,
@@ -46,6 +46,7 @@ from ..services.storage import (
 )
 from ..services.extraction.llm import extractor as llm_extractor  # noqa: F401 (cond. d'écriture)
 from ..services.extraction.assistant import analyze_invoice, apply_proposal
+from ..services.pipeline import REPROCESS_METHODS
 from ..services.validation import ValidationError, readiness, recompute_invoice, validate_invoice
 from ..services.worker import enqueue
 from ..services.tulip.catalog import TulipCatalog
@@ -113,6 +114,85 @@ def _recompute_and_refresh(db: Session, invoice: Invoice) -> None:
     else:
         invoice.status = "A_VERIFIER"
     db.flush()
+
+
+def _auto_export_invoice_to_tulip(invoice: Invoice, db: Session, actor: str = "système") -> dict[str, Any]:
+    """Exporte automatiquement la facture vers Firebird (BE) après validation.
+
+    L'échec Firebird ne fait jamais échouer la validation : le statut est renvoyé
+    à l'interface via la clé ``tulip_export``.
+    """
+    from ..services.tulip.catalog import TulipCatalog
+    from ..services.tulip.firebird import FirebirdError, firebird_client
+    from ..services.tulip.invoice_be import build_be_from_invoice
+    from ..services.tulip.writer import BeWriter
+    from ..models import ExportRecord
+
+    try:
+        client = firebird_client()
+        if not client.config.configured:
+            return {"exported": False, "error": "L'accès Tulip Firebird n'est pas configuré."}
+
+        if not client.config.write_enabled:
+            return {"exported": False, "error": "Les écritures Firebird sont désactivées."}
+
+        built = build_be_from_invoice(db, invoice, TulipCatalog(client))
+        if not built["ready"]:
+            return {
+                "exported": False,
+                "error": "Le BE Tulip ne peut pas être préparé.",
+                "issues": built["issues"],
+                "skipped_lines": built["skipped_lines"],
+            }
+
+        result = BeWriter(client).create_be(built["header"], built["lines"], dry_run=False)
+
+        # Enregistrer l'export
+        numero = result.get("numero")
+        be_code = result.get("be_code")
+        record_audit(
+            db,
+            invoice.id,
+            "tulip_be_cree_auto",
+            actor=actor,
+            details={"be_code": be_code, "numero": numero, "lines": result.get("lines"), "auto": True},
+        )
+        db.add(
+            ExportRecord(
+                invoice_id=invoice.id,
+                format="tulip_be",
+                file_path=f"BE/{be_code}",
+                sha256="",
+                mode="tulip_be",
+            )
+        )
+        invoice.status = "EXPORTEE"
+        db.flush()
+
+        return {
+            "exported": True,
+            "be_code": be_code,
+            "numero": numero,
+            "lines": result.get("lines"),
+            "issues": built["issues"],
+            "skipped_lines": built["skipped_lines"],
+        }
+    except FirebirdError as exc:
+        import logging
+        logging.getLogger("app.invoices").warning(
+            "Export Tulip auto échoué pour la facture %s : %s",
+            invoice.id,
+            str(exc)
+        )
+        return {"exported": False, "error": str(exc)}
+    except Exception as exc:
+        import logging
+        logging.getLogger("app.invoices").warning(
+            "Export Tulip auto échoué pour la facture %s : %s",
+            invoice.id,
+            str(exc)
+        )
+        return {"exported": False, "error": str(exc)}
 
 
 @router.post("/invoices/import", status_code=201)
@@ -504,22 +584,57 @@ def create_line_product(
     if not designation:
         raise HTTPException(status_code=400, detail="La désignation de l'article est obligatoire.")
 
+    from ..services.catalog_codes import next_local_product_code, tulip_write_available
+    from ..services.tulip.firebird import FirebirdError
+    from ..services.tulip.product_writer import ProductWriter
+
+    writer = ProductWriter()
+    tulip_available = tulip_write_available(writer)
     code = (payload.tulip_code or "").strip()
-    if code and db.scalar(select(Product).where(Product.tulip_code == code)):
-        raise HTTPException(status_code=409, detail="Un article avec ce code Tulip existe déjà.")
     if not code:
-        numeric_codes = db.scalars(
-            select(Product.tulip_code).where(Product.tulip_code.op("GLOB")("[0-9]*"))
-        ).all()
-        next_number = max((int(item) for item in numeric_codes if item.isdigit()), default=1000) + 1
-        code = str(next_number)
-        while db.scalar(select(Product).where(Product.tulip_code == code)):
-            next_number += 1
-            code = str(next_number)
+        if tulip_available:
+            try:
+                code = writer.next_code()
+            except FirebirdError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Impossible de préparer le code Tulip : {exc}",
+                ) from exc
+        else:
+            code = next_local_product_code(db)
+    if db.scalar(select(Product).where(Product.tulip_code == code)):
+        raise HTTPException(status_code=409, detail="Un article avec ce code Tulip existe déjà.")
+
+    generated_ref = None
+    if tulip_available:
+        try:
+            tulip = writer.create_product(
+                code=code,
+                designation=designation,
+                ref=payload.reference or line.raw_reference,
+                packaging=payload.packaging
+                or (str(line.packages) if line.packages is not None else None),
+                stock_unit=payload.stock_unit,
+                default_vat_rate=payload.default_vat_rate
+                if payload.default_vat_rate is not None
+                else line.vat_rate,
+                dry_run=False,
+            )
+        except FirebirdError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Rien n'a été créé : l'enregistrement de l'article dans Tulip a échoué. "
+                    f"Détail : {exc}"
+                ),
+            ) from exc
+        generated_ref = tulip.get("ref")
 
     product = Product(
         tulip_code=code,
-        supplier_ref=payload.supplier_ref or line.raw_reference,
+        reference=(payload.reference or line.raw_reference or "").strip() or generated_ref,
+        supplier_ref=payload.supplier_ref,
+        barcode=None,
         designation=designation,
         normalized_designation=normalize_key(designation),
         packaging=payload.packaging or (str(line.packages) if line.packages is not None else None),
@@ -542,6 +657,7 @@ def create_line_product(
     )
     db.commit()
     db.refresh(invoice)
+    invalidate_catalog_cache()
     return invoice_detail(invoice, readiness(invoice))
 
 
@@ -549,28 +665,40 @@ def create_line_product(
 def suggest_product(
     db: Session = Depends(get_db),
     q: str = Query(min_length=1, max_length=120),
+    reference: str | None = Query(default=None, max_length=120),
     supplier_id: int | None = None,
     limit: int = Query(default=8, ge=1, le=30),
 ) -> dict[str, Any]:
-    normalized = quote_like(q)
+    normalized = quote_like(reference or q)
     candidates = suggest_products(db, raw_reference=normalized, raw_designation=q, supplier_id=supplier_id, limit=limit)
     if not candidates:
-        direct = db.scalars(
-            select(Product)
-            .where(
-                or_(
-                    Product.tulip_code.ilike(f"%{q.strip()}%"),
-                    Product.designation.ilike(f"%{q.strip()}%"),
-                    Product.barcode.ilike(f"%{q.strip()}%"),
-                )
+        needle = q.strip()
+        conditions = [
+            Product.tulip_code.ilike(f"%{needle}%"),
+            Product.designation.ilike(f"%{needle}%"),
+            Product.barcode.ilike(f"%{needle}%"),
+            Product.supplier_ref.ilike(f"%{needle}%"),
+        ]
+        if reference and reference.strip() and reference.strip() != needle:
+            ref_needle = reference.strip()
+            conditions.extend(
+                [
+                    Product.barcode.ilike(f"%{ref_needle}%"),
+                    Product.supplier_ref.ilike(f"%{ref_needle}%"),
+                ]
             )
-            .limit(limit)
-        ).all()
+        direct = db.scalars(select(Product).where(or_(*conditions)).limit(limit)).all()
         candidates = [
             {
                 "product_id": product.id,
                 "tulip_code": product.tulip_code,
                 "designation": product.designation,
+                "reference": product.reference,
+                "supplier_ref": product.supplier_ref,
+                "barcode": product.barcode,
+                "packaging": product.packaging,
+                "stock_unit": product.stock_unit,
+                "default_vat_rate": str(product.default_vat_rate) if product.default_vat_rate is not None else None,
                 "score": 0.5,
                 "method": "recherche libre",
             }
@@ -604,7 +732,19 @@ def validate(invoice_id: int, payload: ValidateRequest, db: Session = Depends(ge
         ) from exc
     db.commit()
     db.refresh(invoice)
-    return {"message": "Facture validée.", "invoice": invoice_detail(invoice, readiness(invoice)), **result}
+
+    # Synchronisation automatique vers Firebird après validation
+    tulip_status = _auto_export_invoice_to_tulip(invoice, db, payload.actor)
+    if tulip_status.get("exported"):
+        db.commit()  # Commit le changement de statut EXPORTEE et l'ExportRecord
+        db.refresh(invoice)
+
+    return {
+        "message": "Facture validée.",
+        "invoice": invoice_detail(invoice, readiness(invoice)),
+        "tulip_export": tulip_status,
+        **result
+    }
 
 
 @router.post("/invoices/{invoice_id}/tulip/be")
@@ -691,18 +831,35 @@ def ai_apply(invoice_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
     return {"changes": changes, "invoice": invoice_detail(invoice, readiness(invoice))}
 
 
+REPROCESS_METHOD_LABELS = {
+    "auto": "automatique",
+    "ocr": "OCR local",
+    "gemini": "Gemini",
+    "chatgpt": "ChatGPT",
+    "nemotron": "Nemotron (opencode)",
+}
+
+
 @router.post("/invoices/{invoice_id}/reprocess")
-def reprocess(invoice_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+def reprocess(
+    invoice_id: int,
+    method: str = Query("auto"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     invoice = _get_invoice(db, invoice_id)
     if invoice.status in LOCKED_STATUSES:
         raise HTTPException(status_code=409, detail="Une facture validée ou exportée ne peut pas être retraitée.")
+    method = (method or "auto").strip().lower()
+    if method not in REPROCESS_METHODS:
+        raise HTTPException(status_code=400, detail="Méthode de retraitement inconnue.")
+    label = REPROCESS_METHOD_LABELS[method]
     invoice.status = "IMPORTEE"
-    invoice.stage = "en attente de retraitement"
+    invoice.stage = f"en attente de retraitement ({label})"
     invoice.progress = 2
     invoice.error_message = None
-    record_audit(db, invoice.id, "relance_traitement")
+    record_audit(db, invoice.id, "relance_traitement", details={"method": method})
     db.commit()
-    enqueue(invoice.id)
+    enqueue(invoice.id, method=method)
     return invoice_summary(invoice)
 
 
@@ -734,7 +891,7 @@ def _purge_invoice(db: Session, invoice: Invoice, keep_image: bool = False) -> d
         db,
         None,
         "facture_supprimee",
-        actor="utilisateur",
+        actor="Administrateur",
         entity_type="invoice",
         entity_id=None,
         details=trace,

@@ -31,3 +31,12 @@ data/
 .DS_Store
 Thumbs.db
 *.log
+
+# Builds exécutables et environnements alternatifs
+build/
+dist/
+.venv38/
+
+# Outils de session locale
+.superpowers/
+.claude/

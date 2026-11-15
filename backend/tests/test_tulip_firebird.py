@@ -143,6 +143,15 @@ def test_product_payload_maps_tulip_fields():
     assert "ESCAPE" in client.queries[0]
 
 
+def test_product_filter_keeps_nature_4_articles():
+    # La base SUPERETTE contient 148 articles actifs de nature 4 (dont 101
+    # effectivement vendus, avec code-barres) : ils doivent apparaitre dans
+    # le catalogue, exactement comme dans la liste des articles de Tulip.
+    client = FakeClient([[{"TOTAL": "0"}], []])
+    TulipCatalog(client).products(page_size=10)
+    assert "NATURE IN (1, 2, 4, 5, 10)" in client.queries[0]
+
+
 class FakeClient:
     config = _config(enabled=False, write_enabled=True)
 
@@ -219,6 +228,37 @@ def test_create_be_requires_lines():
     writer, _ = _writer()
     with pytest.raises(FirebirdError, match="Aucune ligne"):
         writer.create_be(_HEADER, [], dry_run=True)
+
+
+def test_create_be_writes_prix_vente_as_mprix():
+    """Le prix de vente saisi sur la ligne est écrit dans DETAILSBR.MPRIX."""
+    lines = [
+        LineItem(
+            product_code=-2147478181,
+            quantity=Decimal("1"),
+            unit_price_ht=Decimal("10"),
+            mprix=Decimal("15.50"),
+        )
+    ]
+    writer, client = _writer()
+
+    dry = writer.create_be(_HEADER, lines, dry_run=True)
+    assert dry["lines"][0]["mprix"] == Decimal("15.50")
+
+    writer2, client2 = _writer()
+    writer2.create_be(_HEADER, lines, dry_run=False)
+    script = client2.executions[0]
+    line_sql = script[script.index("INSERT INTO DETAILSBR (") :]
+    assert "MPRIX" in _columns_of(line_sql)
+    assert "15.50" in line_sql
+
+
+def test_create_be_mprix_null_when_absent():
+    writer, client = _writer()
+    writer.create_be(_HEADER, _LINES, dry_run=False)
+    script = client.executions[0]
+    line_sql = script[script.index("INSERT INTO DETAILSBR (") :]
+    assert "NULL" in line_sql
 
 
 def test_write_requires_flag():

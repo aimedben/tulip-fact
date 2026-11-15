@@ -114,6 +114,22 @@ def test_product_matching_order_and_no_invention(db):
     assert unknown.match_status in {"NON_RAPPROCHE", "SUGGERE"}
 
 
+def test_product_suggestion_uses_scanned_barcode_as_reference(db, client):
+    product = Product(
+        tulip_code="T-BAR",
+        barcode="613 0000 000999",
+        designation="EAU MINERALE 1.5L",
+        normalized_designation=name_key("EAU MINERALE 1.5L"),
+    )
+    db.add(product)
+    db.commit()
+    candidates = suggest_products(db, "6130000000999", "DESIGNATION ILLISIBLE", None)
+    assert candidates
+    assert candidates[0]["product_id"] == product.id
+    assert candidates[0]["method"] == "code-barres exact"
+    assert candidates[0]["barcode"] == "613 0000 000999"
+
+
 def test_fuzzy_suggestion_requires_confirmation(db):
     product = Product(
         tulip_code="T-500",

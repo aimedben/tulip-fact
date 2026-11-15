@@ -8,6 +8,7 @@ import type {
   Paged,
   Product,
   ProductCandidate,
+  ReprocessMethod,
   SettingsData,
   Supplier,
   SupplierCandidate,
@@ -17,6 +18,7 @@ import type {
   TulipLiveSummary,
   TulipLiveSupplier,
   TulipStatus,
+  TulipExportResult,
 } from "../types";
 
 export class ApiError extends Error {
@@ -247,7 +249,9 @@ export const api = {
     payload: {
       designation?: string | null;
       tulip_code?: string | null;
+      reference?: string | null;
       supplier_ref?: string | null;
+      barcode?: string | null;
       packaging?: string | null;
       stock_unit?: string | null;
       default_vat_rate?: number | null;
@@ -261,11 +265,12 @@ export const api = {
     id: number,
     payload: { actor: string; acknowledge_duplicate: boolean; acknowledge_totals: boolean; acknowledge_warnings: boolean },
   ) =>
-    request<{ message: string; invoice: InvoiceDetail }>(`/invoices/${id}/validate`, {
+    request<{ message: string; invoice: InvoiceDetail; tulip_export?: TulipExportResult }>(`/invoices/${id}/validate`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  reprocess: (id: number) => request<InvoiceSummary>(`/invoices/${id}/reprocess`, { method: "POST" }),
+  reprocess: (id: number, method: ReprocessMethod = "auto") =>
+    request<InvoiceSummary>(`/invoices/${id}/reprocess?method=${method}`, { method: "POST" }),
   deleteInvoice: (id: number) =>
     request<{ message: string }>(`/invoices/${id}?confirm=true`, { method: "DELETE" }),
   deleteInvoicesBulk: (ids: number[]) =>
@@ -311,10 +316,12 @@ export const api = {
     request<Product>("/products", { method: "POST", body: JSON.stringify(payload) }),
   updateProduct: (id: number, payload: Record<string, unknown>) =>
     request<Product>(`/products/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
-  suggestProducts: (q: string, supplierId?: number | null) =>
-    request<{ items: ProductCandidate[] }>(
-      `/products/suggest?q=${encodeURIComponent(q)}${supplierId ? `&supplier_id=${supplierId}` : ""}`,
-    ),
+  suggestProducts: (q: string, supplierId?: number | null, reference?: string | null) => {
+    const params = new URLSearchParams({ q });
+    if (supplierId) params.set("supplier_id", String(supplierId));
+    if (reference && reference.trim()) params.set("reference", reference.trim());
+    return request<{ items: ProductCandidate[] }>(`/products/suggest?${params.toString()}`);
+  },
   getProductByBarcode: (barcode: string) =>
     request<Product>(`/products/barcode/${encodeURIComponent(barcode)}`),
   importCatalog: async (kind: "suppliers" | "products", file: File): Promise<ImportReport> => {

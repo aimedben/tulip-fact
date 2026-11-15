@@ -14,16 +14,16 @@ from .pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
 
-_jobs: "queue.Queue[int]" = queue.Queue()
+_jobs: "queue.Queue[tuple[int, str]]" = queue.Queue()
 _started = False
 _lock = threading.Lock()
 
 
 def _loop() -> None:
     while True:
-        invoice_id = _jobs.get()
+        invoice_id, method = _jobs.get()
         try:
-            run_pipeline(invoice_id)
+            run_pipeline(invoice_id, method=method)
         except Exception as exc:  # pragma: no cover - filet de sécurité du worker
             logger.error("Erreur worker facture %s : %s", invoice_id, type(exc).__name__)
         finally:
@@ -42,11 +42,11 @@ def start_worker() -> None:
         _started = True
 
 
-def enqueue(invoice_id: int) -> None:
+def enqueue(invoice_id: int, method: str = "auto") -> None:
     if not settings.worker_enabled:
         return
     start_worker()
-    _jobs.put(invoice_id)
+    _jobs.put((invoice_id, method))
 
 
 def requeue_unfinished() -> list[int]:

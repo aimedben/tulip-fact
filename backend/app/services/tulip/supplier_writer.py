@@ -48,6 +48,34 @@ class SupplierWriter:
         base = int(rows[0]["NEXT_CODE"] or "-2147483648")
         return base + 1
 
+    def next_principal(self) -> str:
+        """Prochain code fournisseur affiché par Tulip (PRINCIPAL, 6 chiffres).
+
+        Tulip numérote les fournisseurs « 000001 », « 000002 »… ; c'est le code
+        que le commerçant voit dans son logiciel. On prend le plus grand
+        PRINCIPAL purement numérique et on ajoute 1 (les codes non numériques
+        comme « rrr » sont ignorés).
+        """
+        rows = self.client.query(
+            "SELECT PRINCIPAL FROM CLIENTS WHERE FRCLT = -1",
+            ("PRINCIPAL",),
+        )
+        highest = 0
+        for row in rows:
+            value = (row.get("PRINCIPAL") or "").strip()
+            if value.isdigit():
+                highest = max(highest, int(value))
+        candidate = highest + 1
+        while True:
+            principal = f"{candidate:06d}"
+            existing = self.client.query(
+                f"SELECT COUNT(*) AS COUNTED FROM CLIENTS WHERE PRINCIPAL = {_q(principal)}",
+                ("COUNTED",),
+            )
+            if not (existing and int(existing[0]["COUNTED"] or "0") > 0):
+                return principal
+            candidate += 1
+
     def create_supplier(
         self,
         name: str,

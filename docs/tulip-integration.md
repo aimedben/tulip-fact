@@ -21,7 +21,7 @@ Aucune écriture n'a été effectuée dans la base de production. La séquence d
 | BE | 5 563 lignes, toutes `CMP=0` et `STOCK=1` ; 5 561 avec `DETTE=1` |
 | Détail BE | 31 441 lignes ; `PARENT` pointe vers `BE.CODE` |
 | BCF | Vide ; `DETAILSBCF` contient une ligne |
-| Articles | 7 098 produits, 6 947 actifs (`ETAT=0`, `NATURE IN (1,2,5,10)`) |
+| Articles | 7 112 produits, 7 108 actifs (`ETAT=0`, `NATURE IN (1,2,4,5,10)`) |
 | Lots | 7 098 lots, un lot principal par produit |
 | Codes-barres | 10 951 codes, unicité vérifiée |
 | Fournisseurs | 303 fournisseurs actifs (`FRCLT=-1`, `ETAT=0`) |

@@ -1,0 +1,18 @@
+# Dépendances pour un build exécutable "léger" (sans GOT-OCR2 / torch).
+# Base = requirements.txt moins les paquets lourds optionnels (torch/transformers/...).
+fastapi>=0.115
+uvicorn[standard]>=0.30
+SQLAlchemy>=2.0
+alembic>=1.13
+pydantic>=2.7
+python-multipart>=0.0.9
+PyMuPDF>=1.24
+Pillow>=10.3
+httpx>=0.27
+rapidocr>=3.10
+rapidocr-onnxruntime>=1.2.3
+onnxruntime>=1.18
+openpyxl>=3.1
+python-dotenv>=1.0
+segno>=1.6
+pyinstaller>=6.10

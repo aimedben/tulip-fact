@@ -26,12 +26,15 @@ from .storage import delete_invoice_files, pages_dir_for, pages_prefix_for
 logger = logging.getLogger(__name__)
 
 MATCHED_STATUSES = {"RAPPROCHE", "CONFIRME"}
+REPROCESS_METHODS = {"auto", "ocr", "gemini", "chatgpt", "nemotron"}
+VISION_METHODS = {"gemini", "chatgpt", "nemotron"}
 
 
 class Pipeline:
-    def __init__(self, invoice_id: int, session_factory=None):
+    def __init__(self, invoice_id: int, session_factory=None, method: str = "auto"):
         self.invoice_id = invoice_id
         self.session_factory = session_factory or database.SessionLocal
+        self.method = method if method in REPROCESS_METHODS else "auto"
         self.db = self.session_factory()
         self.invoice: Invoice | None = None
 
@@ -127,30 +130,72 @@ class Pipeline:
         self._set_progress("extraction structurée", 62, "EXTRACTION")
 
         extracted = parse_invoice(document.all_lines)
-        if vision_extractor.available:
-            self._set_progress("lecture IA des images", 64, "EXTRACTION")
-            page_paths = [(Path(settings.data_dir) / page.image_path) for page in document.pages]
-            vision_result = vision_extractor.extract(page_paths, ocr_text=document.text)
-            if vision_result is not None:
-                replace_lines = not extracted.meta.get("table_parsing")
-                extracted = merge_llm_result(extracted, vision_result, replace_lines=replace_lines)
-                extracted.meta["vision_used"] = True
+        extracted.meta["analysis_method"] = self.method
+        for ocr_warning in document.meta.get("ocr_warnings") or []:
+            if isinstance(ocr_warning, dict):
+                extracted.warnings = [*extracted.warnings, ocr_warning]
+        page_paths = [(Path(settings.data_dir) / page.image_path) for page in document.pages]
+
+        if self.method in VISION_METHODS:
+            provider = "opencode" if self.method == "nemotron" else self.method
+            if not vision_extractor.available_for(provider):
+                extracted.warnings = [
+                    *extracted.warnings,
+                    {
+                        "code": "VISION_INDISPONIBLE",
+                        "severity": "warning",
+                        "message": f"Le fournisseur {self.method} n'est pas configuré ; le résultat OCR local est conservé.",
+                    },
+                ]
             else:
-                in_cooldown, reason = cooldown_status()
-                if in_cooldown:
+                self._set_progress(f"lecture IA des images ({self.method})", 64, "EXTRACTION")
+                vision_result = vision_extractor.extract(
+                    page_paths,
+                    ocr_text=document.text,
+                    provider=provider,
+                    force=True,
+                )
+                if vision_result is not None:
+                    replace_lines = not extracted.meta.get("table_parsing")
+                    extracted = merge_llm_result(extracted, vision_result, replace_lines=replace_lines)
+                    extracted.meta["vision_used"] = True
+                else:
+                    in_cooldown, reason = cooldown_status(provider)
+                    message = reason or (
+                        f"L'analyse {self.method} n'a pas répondu ; le résultat OCR local est conservé."
+                    )
                     extracted.warnings = [
                         *extracted.warnings,
                         {
                             "code": "VISION_INDISPONIBLE",
                             "severity": "warning",
-                            "message": reason,
+                            "message": message,
                         },
                     ]
-        if llm_extractor.available:
-            self._set_progress("complement IA texte", 67, "EXTRACTION")
-            llm_result = llm_extractor.extract(document.text)
-            if llm_result is not None:
-                extracted = merge_llm_result(extracted, llm_result)
+        elif self.method == "auto":
+            if vision_extractor.available:
+                self._set_progress("lecture IA des images", 64, "EXTRACTION")
+                vision_result = vision_extractor.extract(page_paths, ocr_text=document.text)
+                if vision_result is not None:
+                    replace_lines = not extracted.meta.get("table_parsing")
+                    extracted = merge_llm_result(extracted, vision_result, replace_lines=replace_lines)
+                    extracted.meta["vision_used"] = True
+                else:
+                    in_cooldown, reason = cooldown_status()
+                    if in_cooldown:
+                        extracted.warnings = [
+                            *extracted.warnings,
+                            {
+                                "code": "VISION_INDISPONIBLE",
+                                "severity": "warning",
+                                "message": reason,
+                            },
+                        ]
+            if llm_extractor.available:
+                self._set_progress("complement IA texte", 67, "EXTRACTION")
+                llm_result = llm_extractor.extract(document.text)
+                if llm_result is not None:
+                    extracted = merge_llm_result(extracted, llm_result)
 
         if extracted.meta:
             merged_meta = to_jsonable(document.meta)
@@ -176,11 +221,16 @@ class Pipeline:
             if quantity and unit_price and total:
                 tolerance = max(Decimal("0.05"), abs(total) * Decimal("0.002"))
                 if abs(quantity * unit_price - total) > tolerance:
-                    ratio = (total / unit_price).quantize(Decimal("0.001"))
-                    if Decimal("0") < ratio <= Decimal("100000"):
-                        line.quantity = ratio
-                        if not line.line_total_ht:
-                            line.line_total_ht = total
+                    # Règle n°1: ne JAMAIS corriger silencieusement les valeurs
+                    # Ajouter seulement un warning visible pour l'utilisateur
+                    if "LIGNE_CALCUL_INCOHERENT" not in [w.get("code") for w in line.confidence.get("_warnings", [])]:
+                        if not hasattr(line, '_original_warnings'):
+                            line._original_warnings = list(line.confidence.get("_warnings", []))
+                        line.confidence.setdefault("_warnings", []).append({
+                            "code": "LIGNE_CALCUL_INCOHERENT",
+                            "severity": "warning",
+                            "message": f"Calcul incohérent: {quantity} × {unit_price} ≠ {total}",
+                        })
 
         invoice.supplier_name_raw = extracted.supplier_name_raw
         invoice.invoice_number = extracted.invoice_number
@@ -315,5 +365,5 @@ class Pipeline:
         return True
 
 
-def run_pipeline(invoice_id: int, session_factory=None) -> bool:
-    return Pipeline(invoice_id, session_factory=session_factory).run()
+def run_pipeline(invoice_id: int, session_factory=None, method: str = "auto") -> bool:
+    return Pipeline(invoice_id, session_factory=session_factory, method=method).run()

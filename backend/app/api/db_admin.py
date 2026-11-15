@@ -107,7 +107,7 @@ def read_table(
     def _convert(value: Any) -> Any:
         return value
     rows = [
-        {column: value for column, value in zip(column_names, row, strict=True)}
+        {column: value for column, value in zip(column_names, row)}
         for row in db.execute(stmt).fetchall()
     ]
     return {"table": name, "columns": column_names, "total": int(total), "page": page, "page_size": page_size, "items": rows}
@@ -130,7 +130,10 @@ def create_backup() -> dict[str, Any]:
     from ..config import settings
     from ..database import engine
 
-    source = str(engine.url).replace("sqlite:///", "") or "tulip_factures.db"
+    # engine.url.database renvoie le chemin tel que construit : str(engine.url)
+    # percent-encode le chemin depuis SQLAlchemy 2 (« C%3A/Users/... »), ce qui
+    # cassait la copie du fichier de base.
+    source = engine.url.database or "tulip_factures.db"
     if not settings.backups_dir.exists():
         settings.backups_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")

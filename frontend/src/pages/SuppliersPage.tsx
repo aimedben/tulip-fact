@@ -15,6 +15,9 @@ interface SupplierForm {
   phone: string;
   email: string;
   address: string;
+  city: string;
+  mf: string;
+  nis: string;
   notes: string;
   active: boolean;
 }
@@ -27,6 +30,9 @@ const emptyForm: SupplierForm = {
   phone: "",
   email: "",
   address: "",
+  city: "",
+  mf: "",
+  nis: "",
   notes: "",
   active: true,
 };
@@ -94,18 +100,18 @@ export function SuppliersPage() {
   return (
     <>
       <PageHeader
-        title="Référentiel fournisseurs"
-        subtitle="Les codes et noms de ce référentiel servent au rapprochement des factures et à la préparation des bons d'entrée."
+        title="Fournisseurs"
+        subtitle="Chaque fournisseur ajouté ici est enregistré dans Tulip en même temps."
         actions={
           <>
             <button type="button" className="button" disabled={syncing} onClick={syncFromTulip}>
-              {syncing ? <Spinner label="Récupération…" /> : <Icon name="download" size={16} />} Récupérer depuis Tulip
+              {syncing ? <Spinner label="Mise à jour…" /> : <Icon name="download" size={16} />} Mettre à jour depuis Tulip
             </button>
             <button type="button" className="button" onClick={() => setShowImport((value) => !value)}>
-              <Icon name="upload" size={16} /> Import CSV / XLSX
+              <Icon name="upload" size={16} /> Importer une liste
             </button>
             <button type="button" className="button button-primary" onClick={openCreate}>
-              <Icon name="plus" size={16} /> Nouveau fournisseur
+              <Icon name="plus" size={16} /> Ajouter un fournisseur
             </button>
           </>
         }
@@ -164,15 +170,15 @@ export function SuppliersPage() {
         {data && data.items.length === 0 ? (
           <EmptyState
             icon="suppliers"
-            title={appliedQuery ? "Aucun fournisseur trouvé" : "Référentiel vide"}
+            title={appliedQuery ? "Aucun fournisseur trouvé" : "Aucun fournisseur"}
             description={
               appliedQuery
-                ? "Essayez un autre terme ou importez le référentiel depuis un fichier."
-                : "Créez une fiche ou importez votre liste de fournisseurs pour commencer le rapprochement."
+                ? "Essayez un autre nom, ou mettez à jour depuis Tulip."
+                : "Cliquez sur « Ajouter un fournisseur » pour commencer."
             }
             action={
               <button type="button" className="button button-primary" onClick={openCreate}>
-                <Icon name="plus" size={16} /> Nouveau fournisseur
+                <Icon name="plus" size={16} /> Ajouter un fournisseur
               </button>
             }
           />
@@ -290,6 +296,9 @@ function SupplierFormModal({
         phone: supplier.phone ?? "",
         email: supplier.email ?? "",
         address: supplier.address ?? "",
+        city: supplier.city ?? "",
+        mf: supplier.mf ?? "",
+        nis: supplier.nis ?? "",
         notes: supplier.notes ?? "",
         active: supplier.active,
       });
@@ -302,8 +311,8 @@ function SupplierFormModal({
     setForm((current) => ({ ...current, [key]: value }));
 
   const submit = async () => {
-    if (!form.code.trim() || !form.name.trim()) {
-      setError("Le code et le nom sont obligatoires.");
+    if (!form.name.trim()) {
+      setError("Le nom du fournisseur est obligatoire.");
       return;
     }
     setSaving(true);
@@ -318,6 +327,9 @@ function SupplierFormModal({
       phone: form.phone.trim() || null,
       email: form.email.trim() || null,
       address: form.address.trim() || null,
+      city: form.city.trim() || null,
+      mf: form.mf.trim() || null,
+      nis: form.nis.trim() || null,
       notes: form.notes.trim() || null,
     };
     try {
@@ -327,11 +339,17 @@ function SupplierFormModal({
         show("Fournisseur mis à jour.", "success");
         onSaved(form.name.trim());
       } else {
-        await api.createSupplier({ ...payload, code: form.code.trim() });
-        show("Fournisseur créé.", "success");
-        onSaved(form.name.trim());
+        const created = (await api.createSupplier(payload)) as Supplier & {
+          tulip_push?: { pushed?: boolean; principal?: string | null; code?: number | null; reason?: string };
+        };
+        if (created.tulip_push?.pushed) {
+          const principal = created.tulip_push.principal ?? created.code;
+          show(`Enregistré dans Tulip — fournisseur n° ${principal}.`, "success");
+        } else {
+          show(created.tulip_push?.reason ?? "Fournisseur enregistré dans l'application.", "warning");
+        }
+        onSaved(created.name);
       }
-      onSaved();
     } catch (err) {
       const message = err instanceof ApiError || err instanceof Error ? err.message : "Enregistrement impossible.";
       setError(message);
@@ -366,8 +384,12 @@ function SupplierFormModal({
   return (
     <Modal
       open={open}
-      title={supplier ? "Modifier le fournisseur" : "Nouveau fournisseur"}
-      subtitle={supplier ? `${supplier.code} — ${supplier.name}` : "Le code doit correspondre au code fournisseur Tulip."}
+      title={supplier ? "Modifier le fournisseur" : "Ajouter un fournisseur"}
+      subtitle={
+        supplier
+          ? `${supplier.code} — ${supplier.name}`
+          : "Le numéro de fournisseur est attribué automatiquement par Tulip."
+      }
       onClose={onClose}
       wide
       footer={
@@ -380,7 +402,7 @@ function SupplierFormModal({
               disabled={pushing || saving}
               title="Créer ce fournisseur dans la base Tulip (table CLIENTS). Refusé si le code principal existe déjà."
             >
-              {pushing ? <span className="spinner small" /> : <Icon name="upload" size={16} />} Créer dans Tulip
+              {pushing ? <span className="spinner small" /> : <Icon name="upload" size={16} />} Envoyer dans Tulip
             </button>
           )}
           <div className="spacer" />
@@ -394,19 +416,21 @@ function SupplierFormModal({
       }
     >
       <div className="form-grid">
-        <label className="field">
-          <span>Code Tulip *</span>
+        {supplier && (
+          <label className="field">
+            <span>Numéro Tulip</span>
+            <input value={form.code} readOnly className="mono" />
+            <small className="muted">Attribué par Tulip, non modifiable.</small>
+          </label>
+        )}
+        <label className={`field${supplier ? "" : " full"}`}>
+          <span>Nom du fournisseur *</span>
           <input
-            value={form.code}
-            onChange={(event) => set("code", event.target.value)}
-            disabled={Boolean(supplier)}
-            placeholder="000123"
-            className="mono"
+            value={form.name}
+            onChange={(event) => set("name", event.target.value)}
+            placeholder="Ex. : SOCOCIM"
+            autoFocus
           />
-        </label>
-        <label className="field">
-          <span>Nom *</span>
-          <input value={form.name} onChange={(event) => set("name", event.target.value)} />
         </label>
         <label className="field full">
           <span>Alias / variantes</span>
@@ -418,8 +442,16 @@ function SupplierFormModal({
           <small className="muted">Séparez les variantes par une barre verticale « | ».</small>
         </label>
         <label className="field">
-          <span>NIF</span>
+          <span>Matricule fiscal (MF)</span>
+          <input value={form.mf} onChange={(event) => set("mf", event.target.value)} className="mono" />
+        </label>
+        <label className="field">
+          <span>Registre de commerce (NRC)</span>
           <input value={form.tax_id} onChange={(event) => set("tax_id", event.target.value)} className="mono" />
+        </label>
+        <label className="field">
+          <span>NIS</span>
+          <input value={form.nis} onChange={(event) => set("nis", event.target.value)} className="mono" />
         </label>
         <label className="field">
           <span>Téléphone</span>
@@ -432,6 +464,10 @@ function SupplierFormModal({
         <label className="field">
           <span>Adresse</span>
           <input value={form.address} onChange={(event) => set("address", event.target.value)} />
+        </label>
+        <label className="field">
+          <span>Ville</span>
+          <input value={form.city} onChange={(event) => set("city", event.target.value)} />
         </label>
         <label className="field full">
           <span>Notes</span>

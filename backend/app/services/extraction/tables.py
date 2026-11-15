@@ -42,21 +42,48 @@ HEADER_KEYS = {
     "discount": {"remise", "rem", "ristourne", "rabais"},
 }
 
+def _split_text(text: str, x0: float, x1: float, y0: float, y1: float) -> list[dict[str, Any]]:
+    tokens = [token for token in text.split() if token]
+    if len(tokens) <= 1:
+        return [{"text": text.strip(), "x0": x0, "x1": x1, "y0": y0, "y1": y1}] if text.strip() else []
+    widths = [max(1, len(token)) for token in tokens]
+    total = float(sum(widths)) + max(0, len(tokens) - 1)
+    span = x1 - x0
+    result: list[dict[str, Any]] = []
+    cursor = x0
+    for token, width in zip(tokens, widths):
+        token_span = span * (width + 1) / total
+        result.append(
+            {"text": token, "x0": cursor, "x1": min(x1, cursor + token_span), "y0": y0, "y1": y1}
+        )
+        cursor += token_span
+    return result
+
+
 def _words(line: OcrLine) -> list[dict[str, Any]]:
     words = list(getattr(line, "words", None) or [])
-    if words:
-        return sorted(words, key=lambda item: item["x0"])
+    result: list[dict[str, Any]] = []
+    for word in words:
+        text = str(word.get("text", ""))
+        x0, x1 = float(word.get("x0", 0.0)), float(word.get("x1", 1.0))
+        y0, y1 = float(word.get("y0", 0.0)), float(word.get("y1", 0.0))
+        if len(text.split()) > 1:
+            result.extend(_split_text(text, x0, x1, y0, y1))
+        else:
+            result.append({"text": text, "x0": x0, "x1": x1, "y0": y0, "y1": y1})
+    if result:
+        return sorted(result, key=lambda item: item["x0"])
     bbox = line.bbox or {}
     tokens = [token for token in line.text.split() if token]
     if not tokens or not bbox:
         return []
-    x0, x1 = float(bbox.get("x0", 0.0)), float(bbox.get("x1", 1.0))
-    y0, y1 = float(bbox.get("y0", 0.0)), float(bbox.get("y1", 0.0))
-    step = (x1 - x0) / max(1, len(tokens))
-    return [
-        {"text": token, "x0": x0 + i * step, "x1": x0 + (i + 1) * step, "y0": y0, "y1": y1}
-        for i, token in enumerate(tokens)
-    ]
+    return _split_text(
+        line.text,
+        float(bbox.get("x0", 0.0)),
+        float(bbox.get("x1", 1.0)),
+        float(bbox.get("y0", 0.0)),
+        float(bbox.get("y1", 0.0)),
+    )
 
 
 def _anchors(line: OcrLine) -> dict[str, tuple[float, float]] | None:
@@ -87,7 +114,7 @@ def _amount(cell: str) -> Decimal | None:
     return parse_decimal(token)
 
 
-STRICT_COLISAGE = re.compile(r"(?<![\d.,])(\d{1,6}(?:[.,]\d{1,3})?)\s*[xX]\s*\d{1,4}(?![\d])")
+STRICT_COLISAGE = re.compile(r"(?<![\d.,])(\d{1,6}(?:[.,]\d{1,3})?)\s*[xX]\s*(\d{1,4})(?![\d])")
 
 
 def _decimal_from_printed(raw: str) -> Decimal | None:
@@ -105,8 +132,18 @@ def _decimal_from_printed(raw: str) -> Decimal | None:
         return None
 
 
+COLISAGE_FIX = re.compile(r"(?<![\d.,])(\d{1,2}[.,]\d{1,3})\s*[?×\ufffd]\s*(\d{1,4})(?!\d)")
+
+
+def _fix_colisage_glyphs(text: str) -> str:
+    """« 6.091?1 » → « 6.091x1 » : l'OCR dégrade parfois le « X » de colisage."""
+    return COLISAGE_FIX.sub(r"\1x\2", text)
+
+
 def _token_quantity(token: str) -> Decimal | None:
-    match = re.fullmatch(r"(\d{1,6}(?:[.,]\d{1,3})?)[xX]\d{1,4}", token.strip())
+    match = re.fullmatch(
+        r"(\d{1,6}(?:[.,]\d{1,3})?)[xX]\d{1,4}", _fix_colisage_glyphs(token.strip())
+    )
     if not match:
         return None
     value = _decimal_from_printed(match.group(1))
@@ -138,6 +175,17 @@ def _repair(
             ratio = (total / unit_price).quantize(Decimal("0.001"))
             if Decimal("0") < ratio <= Decimal("100000"):
                 return unit_price, total, abs(ratio * unit_price - total) <= TOLERANCE
+        # Prix absent mais quantité et total présents et cohérents : on déduit
+        # le prix par l'arithmétique (total / quantité) quand le quotient est un
+        # montant monétaire propre. La valeur dérivée reste tracée (warning
+        # PRIX_DEDUIT_PAR_ARITHMETIQUE posé par l'appelant).
+        if quantity is not None and quantity > 0 and total is not None and total > 0 and unit_price is None:
+            derived = (total / quantity).quantize(Decimal("0.001"))
+            rounded = derived.quantize(Decimal("0.01"))
+            if _plausible_price(rounded) and abs(derived - rounded) <= Decimal("0.005"):
+                repaired = (quantity * rounded).quantize(Decimal("0.01"))
+                if abs(repaired - total) <= TOLERANCE:
+                    return rounded, total, True
         return unit_price, total, False
 
     def tolerance(value: Decimal) -> Decimal:
@@ -193,7 +241,12 @@ def _data_anchors(
         for word in _words(line):
             if re.search(r"\d", word["text"]):
                 points.append((float(word["x0"]) + float(word["x1"])) / 2)
-    if len(points) < 8:
+    numeric_rows = sum(
+        1
+        for line in lines
+        if (line.bbox or {}).get("y0", 0.0) > header_y and re.search(r"\d", line.text) and not TOTAL_LINE_RE.match(line.text.lower())
+    )
+    if len(points) < 8 or numeric_rows < 6:
         return header_anchors
 
     ordered_header = sorted(header_anchors.items(), key=lambda item: (item[1][0] + item[1][1]) / 2)
@@ -209,6 +262,10 @@ def _data_anchors(
             centers = updated
             break
         centers = updated
+
+    for (column, (x0, x1)), center in zip(ordered_header, centers):
+        if abs(center - (x0 + x1) / 2) > 0.08:
+            return header_anchors
 
     anchors: dict[str, tuple[float, float]] = {}
     for (column, _), center in zip(ordered_header, centers):
@@ -248,6 +305,7 @@ def _build_line(
     row: OcrLine,
     anchors: dict[str, tuple[float, float]],
     pending: str | None,
+    words: list[dict[str, Any]] | None = None,
 ) -> ExtractedLine | None:
     regions = _split_columns(anchors)
     cells: dict[str, list[str]] = {
@@ -259,55 +317,127 @@ def _build_line(
         "total": [],
         "discount": [],
     }
-    for word in _words(row):
+    for word in (words if words is not None else _words(row)):
         center = (float(word["x0"]) + float(word["x1"])) / 2
-        cells[_column_of(center, regions)].append(word["text"])
+        column = _column_of(center, regions)
+        if column != "designation" and re.search(r"[A-Za-z\u00c0-\u00ff]{2,}", word["text"]):
+            column = "designation"
+        cells[column].append(word["text"])
 
     designation = clean_text(" ".join(cells["designation"])).strip(" -:;|.")
     if pending:
         designation = f"{pending} {designation}".strip()
+    designation = re.sub(
+        r"\b(?:lot|n[°o]\s*lot)\s*[:#-]?\s*[A-Z0-9._/-]+",
+        "",
+        designation,
+        flags=re.IGNORECASE,
+    ).strip(" -:;|.")
+    designation = re.sub(r"^[^0-9A-Za-z\u00c0-\u00ff]+", "", designation).strip()
 
-    unit_price = _amount(" ".join(cells["unit_price"]))
     total = _amount(" ".join(cells["total"]))
-    packages = _amount(" ".join(cells["packages"])) if cells["packages"] else None
     vat_rate = _amount(" ".join(cells["vat"])) if cells["vat"] else None
-    if unit_price is None and total is None:
+
+    # Colisage imprimé « 2X4 » : nombre de colis et contenance séparés.
+    packages = None
+    pack_multiplier = None
+    if cells["packages"]:
+        strict = STRICT_COLISAGE.search(_fix_colisage_glyphs(" ".join(cells["packages"])))
+        if strict:
+            packages = _decimal_from_printed(strict.group(1))
+            pack_multiplier = _decimal_from_printed(strict.group(2))
+        else:
+            packages = _amount(" ".join(cells["packages"]))
+
+    raw_unit_price = _amount(" ".join(cells["unit_price"]))
+    if raw_unit_price is None and total is None:
         return None
 
-    # La quantité entre parenthèses « 4X1 » / « 6.091X1 » est le colisage imprimé :
-    # c'est la donnée la plus fiable de la ligne, on ne la déduit jamais d'autre chose.
+    # Le prix imprimé a toujours des décimales ; les chiffres ajoutés à la main
+    # sur la facture (ex. « 530 » dans la colonne Prix du bon de caisse) n'en ont
+    # pas : on les écarte en priorité.
+    def _has_decimals(token: str) -> bool:
+        return bool(re.search(r"\d[.,]\d{1,2}\s*$", token.strip()))
+
+    quantity_candidates = [
+        {"token": token, "value": _amount(token)}
+        for token in cells["quantity"]
+        if _amount(token) is not None and _amount(token) > 0
+    ]
+    price_candidates = [
+        {"token": token, "value": _amount(token)}
+        for token in cells["unit_price"]
+        if _amount(token) is not None
+    ]
+
+    unit_price = None
+    for entry in price_candidates:
+        if _has_decimals(entry["token"]):
+            unit_price = entry["value"]
+            if len([e for e in price_candidates if _has_decimals(e["token"])]) <= 1:
+                break
+    else:
+        if price_candidates:
+            unit_price = price_candidates[0]["value"]
+
+    # La quantité imprimée dans sa colonne est prioritaire ; entre deux prix
+    # plausibles, celui qui vérifie quantité × prix = montant gagne.
     quantity = None
     qty_from_colisage = False
-    for token in cells["quantity"]:
-        token_quantity = _token_quantity(token)
+    for entry in quantity_candidates:
+        token_quantity = _token_quantity(entry["token"])
         if token_quantity is not None:
+            # Cas rare « 4X1 » dans la colonne Quantité : multiplier × colis.
             quantity = token_quantity
             qty_from_colisage = True
             break
+    if quantity is None and quantity_candidates:
+        quantity = quantity_candidates[0]["value"]
+    if quantity is not None and total is not None:
+        decimal_prices = [e for e in price_candidates if _has_decimals(e["token"])]
+        if len(decimal_prices) > 1:
+            best = min(
+                decimal_prices,
+                key=lambda entry: abs(quantity * entry["value"] - total),
+            )
+            unit_price = best["value"]
+
+    # Colisage en repli : « 2X4 » = 2 colis × 4 unités = 8 quantité.
     if not qty_from_colisage:
-        strict = STRICT_COLISAGE.search(row.text)
+        strict = STRICT_COLISAGE.search(_fix_colisage_glyphs(row.text))
         if strict:
-            quantity = _decimal_from_printed(strict.group(1))
-            qty_from_colisage = quantity is not None and Decimal("0") < quantity <= Decimal("100000")
-    if not qty_from_colisage and cells["quantity"]:
-        candidate = _amount(" ".join(cells["quantity"]))
-        if candidate is not None and candidate > 0:
-            quantity = candidate
+            strict_quantity = _decimal_from_printed(strict.group(1))
+            if (
+                strict_quantity is not None
+                and Decimal("0") < strict_quantity <= Decimal("100000")
+                and quantity in (None, packages)
+            ):
+                quantity = strict_quantity
+                qty_from_colisage = True
+        if (
+            quantity is None
+            and packages is not None
+            and pack_multiplier is not None
+            and packages > 0
+        ):
+            quantity = (packages * pack_multiplier).quantize(Decimal("0.001"))
 
-    unit_price, total, coherent = _repair(qty_from_colisage, quantity, unit_price, total)
-    if total is None and unit_price is None:
-        return None
+        # Quantité décimale collée au prix par l'OCR (« 2.996X155000 » =
+        # « 2.996X1 550,00 ») : le préfixe collé au X est la quantité — on ne
+        # l'accepte qu'avec 1 à 4 décimales, quantité absente par ailleurs.
+        if quantity is None:
+            stuck = re.search(
+                r"(?<![\d.,])(\d{1,3}[.,]\d{1,4})\s*[xX×]", row.text
+            )
+            if stuck:
+                # « 2.996 » dans « 2.996X155000 » : 1 à 4 digits après le
+                # séparateur, ce n'est pas un séparateur milliers mais une
+                # décimale (quantité en kg ou unités fractionnaires).
+                stuck_quantity = Decimal(stuck.group(1).replace(",", "."))
+                if Decimal("0") < stuck_quantity < Decimal("100"):
+                    quantity = stuck_quantity
 
-    if not re.search(r"[A-Za-zÀ-ÿ]{2,}", designation):
-        # Libellé illisible mais montants et colisage présents : mieux vaut une ligne à
-        # compléter qu'une ligne manquante (risque d'oubli sur la facture).
-        if STRICT_COLISAGE.search(row.text) is None or total is None or quantity is None:
-            return None
-        designation = "Article à compléter"
-        weak_designation = True
-    else:
-        weak_designation = len(re.findall(r"[A-Za-zÀ-ÿ]{2,}", designation)) < 2
-
+    ocr_total = total  # valeur OCR d'origine, conservée pour la traçabilité
     lot_match = LOT_PATTERN.search(row.text)
     discount_match = DISCOUNT_PATTERN.search(row.text)
     reference_match = re.match(r"^([A-Z0-9]{2,}[-/][A-Z0-9/\-]+)\s+", row.text)
@@ -317,6 +447,97 @@ def _build_line(
             "",
             designation,
         ).strip()
+
+    unit_price, total, coherent = _repair(qty_from_colisage, quantity, unit_price, total)
+    if total is None and unit_price is None:
+        return None
+
+    line_warnings: list[dict[str, Any]] = []
+
+    # Total HT calculé automatiquement : quand la quantité et le prix unitaire
+    # sont fiables mais que le total imprimé est absent ou imprécis (virgule
+    # mangée par l'OCR), la valeur livrée est quantité × prix unitaire. La
+    # valeur OCR d'origine reste tracée dans le warning.
+    recalculated = False
+    if (
+        not coherent
+        and quantity is not None
+        and quantity > 0
+        and unit_price is not None
+        and discount_match is None  # remise : « qte × PU ≠ total » est légitime
+    ):
+        total = (quantity * unit_price).quantize(Decimal("0.01"))
+        recalculated = True
+        line_warnings.append(
+            {
+                "code": "TOTAL_RECALCULE",
+                "severity": "warning",
+                "message": (
+                    "Total HT recalculé automatiquement (quantité × prix unitaire). "
+                    f"Valeur OCR d'origine : {ocr_total if ocr_total is not None else 'absente'}."
+                ),
+                "original_total": str(ocr_total) if ocr_total is not None else None,
+            }
+        )
+        coherent = True
+    elif (
+        coherent
+        and ocr_total is None
+        and total is not None
+        and quantity is not None
+        and unit_price is not None
+    ):
+        # Total absent de l'OCR : calculé, tracé à titre informatif.
+        line_warnings.append(
+            {
+                "code": "TOTAL_CALCULE",
+                "severity": "info",
+                "message": "Total HT absent de l'OCR, calculé par quantité × prix unitaire.",
+            }
+        )
+
+    if not re.search(r"[A-Za-zÀ-ÿ]{2,}", designation):
+        # Libellé illisible mais montants et colisage présents : mieux vaut une ligne à
+        # compléter qu'une ligne manquante (risque d'oubli sur la facture).
+        if STRICT_COLISAGE.search(_fix_colisage_glyphs(row.text)) is None or total is None or quantity is None:
+            return None
+        designation = "Article à compléter"
+        weak_designation = True
+    else:
+        weak_designation = len(re.findall(r"[A-Za-zÀ-ÿ]{2,}", designation)) < 2
+
+    price_derived = (
+        quantity is not None
+        and unit_price is not None
+        and not any(_amount(token) for token in (cells["unit_price"] or []))
+    )
+    if price_derived:
+        line_warnings.append(
+            {
+                "code": "PRIX_DEDUIT_PAR_ARITHMETIQUE",
+                "severity": "info",
+                "message": "Prix unitaire absent de l'OCR, déduit par quantité × prix = total.",
+            }
+        )
+
+    confidence = {
+        "global": (0.9 if coherent else 0.6) if not weak_designation else 0.45,
+        "reference": 0.8 if reference_match else 0.0,
+        "designation": 0.85,
+        "quantity": 0.9 if quantity is not None else 0.0,
+        "unit_price": 0.9 if unit_price is not None else 0.0,
+        "total": 0.9 if total is not None else 0.0,
+        "lot": 0.7 if lot_match else 0.0,
+        "packages": 0.0,
+    }
+    if line_warnings:
+        # Convention du pipeline : les warnings de ligne vivent dans la
+        # configuration JSON de confiance (« _warnings »), comme
+        # LIGNE_CALCUL_INCOHERENT côté pipeline.
+        confidence["_warnings"] = line_warnings
+    if recalculated:
+        # Un montant issu d'un recalcul reste à vérifier par l'humain.
+        confidence["global"] = min(confidence["global"], 0.7)
 
     return ExtractedLine(
         raw_reference=reference_match.group(1) if reference_match else None,
@@ -329,24 +550,89 @@ def _build_line(
         line_total_ht=total,
         discount_value=parse_decimal(discount_match.group(1)) if discount_match else None,
         discount_type=("percent" if discount_match and discount_match.group(2) else "value") if discount_match else None,
-        confidence={
-            "global": (0.9 if coherent else 0.6) if not weak_designation else 0.45,
-            "reference": 0.8 if reference_match else 0.0,
-            "designation": 0.85,
-            "quantity": 0.9 if quantity is not None else 0.0,
-            "unit_price": 0.9 if unit_price is not None else 0.0,
-            "total": 0.9 if total is not None else 0.0,
-            "lot": 0.7 if lot_match else 0.0,
-            "packages": 0.0,
-        },
+        confidence=confidence,
         source_page=row.page_number,
         source_bbox=row.bbox,
         original_text=row.text,
+        warnings=line_warnings,
     )
 
 
+def _cluster_rows(page_lines: list[OcrLine], header_y: float) -> list[list[dict[str, Any]]]:
+    words: list[dict[str, Any]] = []
+    for line in page_lines:
+        y0 = (line.bbox or {}).get("y0", 0.0)
+        if y0 <= header_y or _is_header(line):
+            continue
+        for word in _words(line):
+            words.append(
+                {
+                    "text": word["text"],
+                    "x0": float(word["x0"]),
+                    "x1": float(word["x1"]),
+                    "y0": float(word["y0"]),
+                    "y1": float(word["y1"]),
+                }
+            )
+    if not words:
+        return []
+    heights = sorted(max(1e-4, word["y1"] - word["y0"]) for word in words)
+    median = heights[len(heights) // 2]
+    tolerance = max(0.004, 0.5 * median)
+    words.sort(key=lambda word: ((word["y0"] + word["y1"]) / 2, word["x0"]))
+    rows: list[dict[str, Any]] = []
+    for word in words:
+        center = (word["y0"] + word["y1"]) / 2
+        if rows and abs(center - rows[-1]["center"]) <= tolerance:
+            rows[-1]["words"].append(word)
+            group = rows[-1]["words"]
+            rows[-1]["center"] = sum((item["y0"] + item["y1"]) / 2 for item in group) / len(group)
+        else:
+            rows.append({"center": center, "words": [word]})
+    for row in rows:
+        row["words"].sort(key=lambda word: word["x0"])
+    return [row["words"] for row in rows]
+
+
+SETTLED_LINE_RE = re.compile(
+    r"^(?:anc\.?\s*solde|nouv\.?\s*solde|solde|verse(?:ment)?|rendu|especes?|vers[ée])\b",
+    re.IGNORECASE,
+)
+
+
+def _rows_to_lines(
+    rows: list[list[dict[str, Any]]],
+    anchors: dict[str, tuple[float, float]],
+    page_number: int,
+) -> list[ExtractedLine]:
+    output: list[ExtractedLine] = []
+    pending: str | None = None
+    for words in rows:
+        text = " ".join(str(word["text"]) for word in words)
+        if TOTAL_LINE_RE.match(text.lower()) or SETTLED_LINE_RE.match(clean_text(text).strip(" -:;|.")):
+            continue
+        if not re.search(r"\d", text):
+            cleaned = clean_text(text).strip(" -:;|.")
+            if len(re.findall(r"[A-Za-z\u00c0-\u00ff]{2,}", cleaned)) >= 2:
+                pending = f"{pending} {cleaned}".strip() if pending else cleaned
+            continue
+        bbox = {
+            "x0": min(word["x0"] for word in words),
+            "y0": min(word["y0"] for word in words),
+            "x1": max(word["x1"] for word in words),
+            "y1": max(word["y1"] for word in words),
+        }
+        stub = OcrLine(text=text, page_number=page_number, bbox=bbox)
+        built = _build_line(stub, anchors, pending, words=words)
+        if built is None:
+            continue
+        pending = None
+        output.append(built)
+    return output
+
+
 def parse_table_rows(lines: list[OcrLine], min_rows: int = 2) -> list[ExtractedLine] | None:
-    """Retourne les lignes reconstruites, ou None si aucun tableau crédible."""
+    """Retourne les lignes reconstruites, ou None si aucun tableau cr閐ible."""
     if not lines:
         return None
     positioned = sum(1 for line in lines if getattr(line, "words", None))
@@ -362,35 +648,43 @@ def parse_table_rows(lines: list[OcrLine], min_rows: int = 2) -> list[ExtractedL
         page_lines = sorted(by_page[page_number], key=lambda item: (item.bbox or {}).get("y0", 0))
         anchors: dict[str, float] | None = None
         header_y = -1.0
-        for index, line in enumerate(page_lines):
+        for line in page_lines:
             if _is_header(line):
                 candidate = _anchors(line)
                 if candidate:
-                    anchors = _data_anchors(page_lines, line, candidate)
+                    if line.source == "pdf-text":
+                        anchors = candidate
+                    else:
+                        anchors = _data_anchors(page_lines, line, candidate)
                     header_y = (line.bbox or {}).get("y0", 0.0)
                     break
 
         if anchors is None:
             continue
 
+        by_line: list[ExtractedLine] = []
         pending: str | None = None
         for line in page_lines:
             y0 = (line.bbox or {}).get("y0", 0.0)
             if y0 <= header_y or _is_header(line):
                 continue
-            lowered = line.text.lower()
-            if TOTAL_LINE_RE.match(lowered):
+            if TOTAL_LINE_RE.match(line.text.lower()):
+                continue
+            if SETTLED_LINE_RE.match(clean_text(line.text).strip(" -:;|.")):
                 continue
             if not re.search(r"\d", line.text):
                 text = clean_text(line.text).strip(" -:;|.")
-                if len(re.findall(r"[A-Za-zÀ-ÿ]{2,}", text)) >= 2:
+                if len(re.findall(r"[A-Za-z\u00c0-\u00ff]{2,}", text)) >= 2:
                     pending = f"{pending} {text}".strip() if pending else text
                 continue
             built = _build_line(line, anchors, pending)
             if built is None:
                 continue
             pending = None
-            results.append(built)
+            by_line.append(built)
+
+        by_words = _rows_to_lines(_cluster_rows(page_lines, header_y), anchors, page_number)
+        results.extend(by_words if len(by_words) > len(by_line) else by_line)
 
     if len(results) < min_rows:
         return None

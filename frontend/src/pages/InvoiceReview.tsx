@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
-import type { InvoiceDetail, InvoiceLine } from "../types";
+import type { InvoiceDetail, InvoiceLine, ReprocessMethod } from "../types";
 import {
   formatDateFR,
   formatDateTimeFR,
@@ -18,7 +18,6 @@ import { Modal } from "../components/Modal";
 import { DocumentViewer } from "../components/review/DocumentViewer";
 import { HeaderEditor } from "../components/review/HeaderEditor";
 import { LinesEditor } from "../components/review/LinesEditor";
-import { SupplierPanel } from "../components/review/SupplierPanel";
 import { ExportModal, ValidationModal } from "../components/review/ReviewModals";
 import { TulipBeModal } from "../components/TulipBeModal";
 import { useToast } from "../components/Toast";
@@ -41,6 +40,14 @@ function auditLabel(action: string): string {
   return AUDIT_LABELS[action] ?? action.replace(/_/g, " ");
 }
 
+const REPROCESS_METHODS: { value: ReprocessMethod; label: string; hint: string }[] = [
+  { value: "auto", label: "Automatique", hint: "Configuration actuelle de l'application" },
+  { value: "ocr", label: "OCR local", hint: "Tesseract uniquement, sans IA" },
+  { value: "gemini", label: "Gemini", hint: "Analyse d'image Gemini" },
+  { value: "chatgpt", label: "ChatGPT", hint: "Analyse d'image OpenAI" },
+  { value: "nemotron", label: "Nemotron (opencode)", hint: "Analyse d'image opencode Zen" },
+];
+
 function amountTone(extracted: string | null | undefined, calculated: string | null | undefined): string {
   const left = parseAmount(extracted);
   const right = parseAmount(calculated);
@@ -61,8 +68,11 @@ export function InvoiceReview() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
+  const [reprocessMethod, setReprocessMethod] = useState<ReprocessMethod>("auto");
   const [tulipBeOpen, setTulipBeOpen] = useState(false);
+  const [checksOpen, setChecksOpen] = useState(false);
   const { show } = useToast();
+  const reprocessLabel = REPROCESS_METHODS.find((option) => option.value === reprocessMethod)?.label ?? "Automatique";
 
   useEffect(() => {
     let cancelled = false;
@@ -126,12 +136,28 @@ export function InvoiceReview() {
   const reprocess = async () => {
     setReprocessing(true);
     try {
-      await api.reprocess(invoiceId);
+      await api.reprocess(invoiceId, reprocessMethod);
       const refreshed = await api.invoice(invoiceId);
       setDetail(refreshed);
-      show("Traitement relancé.", "success");
+      show(`Traitement relancé avec ${reprocessLabel}.`, "success");
     } catch (error) {
       const message = error instanceof ApiError || error instanceof Error ? error.message : "Relance impossible.";
+      show(message, "error");
+    } finally {
+      setReprocessing(false);
+    }
+  };
+
+  const scanWithMethod = async (method: ReprocessMethod) => {
+    setReprocessing(true);
+    const methodLabel = REPROCESS_METHODS.find((m) => m.value === method)?.label ?? method;
+    try {
+      await api.reprocess(invoiceId, method);
+      const refreshed = await api.invoice(invoiceId);
+      setDetail(refreshed);
+      show(`Scan lancé avec ${methodLabel}.`, "success");
+    } catch (error) {
+      const message = error instanceof ApiError || error instanceof Error ? error.message : "Scan impossible.";
       show(message, "error");
     } finally {
       setReprocessing(false);
@@ -168,6 +194,8 @@ export function InvoiceReview() {
   const hardCount = detail.readiness.hard.length;
   const accountingCount = detail.readiness.accounting_errors.length;
   const allChecks = [...detail.checks, ...detail.warnings];
+  const blockers = allChecks.filter((check) => check.severity === "error").length;
+  const warnCount = allChecks.filter((check) => check.severity === "warning").length;
 
   const readinessLabel = locked
     ? "Facture verrouillée"
@@ -223,9 +251,48 @@ export function InvoiceReview() {
               </button>
             )}
             {!locked && detail.status !== "EXTRACTION" && detail.status !== "IMPORTEE" && (
-              <button type="button" className="button" onClick={reprocess} disabled={reprocessing}>
-                {reprocessing ? <span className="spinner small" /> : <Icon name="refresh" size={16} />} Relancer l'OCR
-              </button>
+              <div className="reprocess-control">
+                <select
+                  aria-label="Méthode de scan"
+                  title="Choisir la méthode de scan"
+                  value={reprocessMethod}
+                  onChange={(event) => setReprocessMethod(event.target.value as ReprocessMethod)}
+                  disabled={reprocessing}
+                >
+                  {REPROCESS_METHODS.map((option) => (
+                    <option key={option.value} value={option.value} title={option.hint}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={reprocess}
+                  disabled={reprocessing}
+                  title={`Relancer avec ${reprocessLabel}`}
+                >
+                  {reprocessing ? <span className="spinner small" /> : <Icon name="refresh" size={16} />} Relancer l'OCR
+                </button>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => scanWithMethod("gemini")}
+                  disabled={reprocessing}
+                  title="Scanner avec Gemini (utilise la clé API de la configuration)"
+                >
+                  {reprocessing ? <span className="spinner small" /> : <Icon name="spark" size={16} />} Scanner avec Gemini
+                </button>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => scanWithMethod("chatgpt")}
+                  disabled={reprocessing}
+                  title="Scanner avec ChatGPT (utilise la clé API de la configuration)"
+                >
+                  {reprocessing ? <span className="spinner small" /> : <Icon name="spark" size={16} />} Scanner avec ChatGPT
+                </button>
+              </div>
             )}
             <button type="button" className="button button-ghost-danger" onClick={() => setDeleteOpen(true)} disabled={processing}>
               <Icon name="trash" size={16} /> Supprimer
@@ -254,7 +321,7 @@ export function InvoiceReview() {
             <strong>Le traitement a échoué</strong>
             <p>{detail.error_message ?? "Consultez le message d'erreur et relancez le traitement."}</p>
             <button type="button" className="button button-sm" onClick={reprocess} disabled={reprocessing}>
-              <Icon name="refresh" size={15} /> Relancer le traitement
+              <Icon name="refresh" size={15} /> Relancer le traitement ({reprocessLabel})
             </button>
           </div>
         </div>
@@ -294,25 +361,20 @@ export function InvoiceReview() {
         </div>
       )}
 
-      <div className="review-grid">
+      <div className="review-top-split">
         <DocumentViewer detail={detail} selectedLine={selectedLine} onSelectLine={(line) => setSelectedLineId(line.id)} />
-
-        <div className="stack">
-          <section className="panel">
-            <header className="panel-header">
-              <div>
-                <h2>En-tête de facture</h2>
-                <p className="muted small">Champs repris dans le bon d'entrée Tulip</p>
-              </div>
-              <span className="muted tiny">Les corrections sont historisées</span>
-            </header>
-            <div className="panel-body">
-              <HeaderEditor detail={detail} readOnly={readOnly} onUpdated={update} />
+        <section className="panel review-header-panel">
+          <header className="panel-header">
+            <div>
+              <h2>En-tête de facture</h2>
+              <p className="muted small">Champs enregistrés dans Tulip</p>
             </div>
-          </section>
-
-          <SupplierPanel detail={detail} readOnly={readOnly} onUpdated={update} />
-        </div>
+            <span className="muted tiny">Les corrections sont historisées</span>
+          </header>
+          <div className="panel-body">
+            <HeaderEditor detail={detail} readOnly={readOnly} onUpdated={update} />
+          </div>
+        </section>
       </div>
 
       <LinesEditor
@@ -324,20 +386,6 @@ export function InvoiceReview() {
       />
 
       <div className="review-bottom">
-        <section className="panel" id="controles">
-          <header className="panel-header">
-            <div>
-              <h2>Contrôles automatiques</h2>
-              <p className="muted small">Calculs indépendants, sans correction automatique</p>
-            </div>
-            <span className={`status-badge tone-${hardCount > 0 ? "danger" : accountingCount > 0 ? "warning" : "success"}`}>
-              {hardCount > 0 ? `${hardCount} bloquant${hardCount > 1 ? "s" : ""}` : accountingCount > 0 ? `${accountingCount} écart${accountingCount > 1 ? "s" : ""}` : "Aucun bloquant"}
-            </span>
-          </header>
-          <div className="panel-body">
-            <CheckList checks={allChecks} emptyLabel="Aucun écart détecté. Les champs obligatoires sont présents." />
-          </div>
-        </section>
 
         <section className="panel">
           <header className="panel-header">

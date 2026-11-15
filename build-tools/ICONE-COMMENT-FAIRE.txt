@@ -1,0 +1,86 @@
+ICONE DE TULIPFACTURES - COMMENT LA REGENERER
+=============================================
+
+Tout est reproductible : aucune image "achetee" ni outil externe.
+Les outils sont dans ce dossier build-tools\, les sources dans ..\assets\.
+
+
+CE QUI EXISTE
+-------------
+..\assets\tulip-factures.ico              l'icone finale (7 tailles)
+..\assets\tulip-factures-1024.png         le dessin detaille (grandes tailles)
+..\assets\tulip-factures-petit-1024.png   le dessin simplifie (16/24/32 px)
+
+L'icone represente une tulipe blanche sur un badge bleu arrondi
+(degrade #3B82F6 -> #1E40AF, les couleurs du lanceur).
+
+DEUX DESSINS, ET C'EST VOULU
+----------------------------
+A 16, 24 et 32 px (barre des taches, listes de fichiers), un dessin
+detaille devient une tache blanche illisible. On utilise donc :
+  - 16 / 24 / 32 px : la fleur seule, grosse, aux encoches franches
+  - 48 px et plus    : la tulipe complete (tige + deux feuilles)
+
+Windows choisit tout seul la bonne taille dans le .ico.
+
+
+REGENERER L'ICONE
+-----------------
+Depuis la racine du projet :
+
+  .venv38\Scripts\python.exe build-tools\make_tulip_icon.py assets\tulip-factures-1024.png
+  .venv38\Scripts\python.exe build-tools\make_tulip_icon.py assets\tulip-factures-petit-1024.png --small
+  .venv38\Scripts\python.exe build-tools\make_ico.py assets\tulip-factures-1024.png assets\tulip-factures.ico --small-source assets\tulip-factures-petit-1024.png --preview
+
+--preview ecrit des PNG de controle (16/32/48/256) et une planche
+"tulip-factures-planche.png" pour verifier le rendu avant de livrer.
+
+Les couleurs et les formes se reglent en haut de make_tulip_icon.py
+(TOP, BOTTOM, HEAD) et dans build_small() pour la version simplifiee.
+
+
+APPLIQUER L'ICONE A UN EXE DEJA CONSTRUIT
+-----------------------------------------
+  .venv38\Scripts\python.exe build-tools\set_exe_icon.py chemin\TulipFactures.exe assets\tulip-factures.ico
+
+Verifier seulement ce que contient un exe :
+
+  .venv38\Scripts\python.exe build-tools\set_exe_icon.py chemin\TulipFactures.exe --verify
+
+
+ATTENTION : LES EXE PYINSTALLER ONEFILE
+---------------------------------------
+Un exe PyInstaller "onefile" = un programme Windows + une ARCHIVE collee
+a la fin du fichier (marqueur "MEI" juste avant la fin).
+
+L'API Windows UpdateResource reconstruit le fichier et JETTE cette archive.
+L'exe passe alors de 9,9 Mo a 246 Ko et ne demarre plus : il affiche
+"Fatal error detected - Error loading Python DLL".
+
+set_exe_icon.py gere ce cas : il coupe le fichier a la fin du PE,
+applique l'icone, puis recolle l'archive. Il l'annonce dans sa sortie
+("archive PyInstaller detectee" puis "archive recollee : OK").
+
+Ne jamais utiliser un autre outil de changement d'icone sur cet exe
+sans verifier ensuite que l'application demarre vraiment.
+
+
+APRES APPLICATION : VERIFIER
+----------------------------
+1. Double-cliquer sur la cle ou le dossier : 1-REGLER-CONNEXION-TULIP.bat
+   -> la fenetre "Tulip Factures - Configuration de la connexion Tulip"
+      doit s'ouvrir. Si un message "Fatal error" apparait, l'exe est casse.
+
+2. L'icone doit apparaitre sur le fichier dans l'Explorateur Windows.
+   Si l'ancienne icone reste affichee : c'est le cache de Windows.
+   Il se vide en deplacant l'exe dans un autre dossier, ou en redemarrant.
+
+
+POUR UNE RECONSTRUCTION COMPLETE
+--------------------------------
+Les deux fichiers .spec contiennent deja la ligne :
+
+    icon=[str(root / 'assets' / 'tulip-factures.ico')],
+
+Une compilation PyInstaller normale produira donc directement un exe
+avec l'icone. Il n'y a rien a refaire a la main.

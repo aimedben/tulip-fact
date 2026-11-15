@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.models import Product
+from app.normalization import name_key
 from app.services.tulip.sync import sync_products
 
 
@@ -88,3 +89,39 @@ def test_sync_products_creates_and_upserts(client, db):
     assert ben.designation == "BENTOUMIA ROTI VOLAILLE"
     assert ben.barcode == "6134495000339"
     assert ben.default_vat_rate == Decimal("9.0")
+
+
+def test_sync_matches_local_numeric_code_and_avoids_duplicate(client, db):
+    """Le listing Tulip s'identifie par la REF (« ART12445 ») ; un article créé
+    localement porte son code numérique (« 12445 »). Sans matching par code
+    interne, chaque resynchronisation recréait l'article : doublon local."""
+    local = Product(tulip_code="12445", designation="ramit", normalized_designation=name_key("ramit"))
+    db.add(local)
+    db.commit()
+
+    catalog = FakeProductCatalog(
+        FakeProductClient(
+            [
+                [
+                    {
+                        "tulip_code": "ART12445",
+                        "tulip_id": 12445,
+                        "ref": "ART12445",
+                        "designation": "ramit",
+                        "supplier_ref": None,
+                        "barcode": None,
+                        "packaging": "1",
+                        "stock_unit": "U",
+                        "default_vat_rate": 0.0,
+                    }
+                ],
+            ],
+            1,
+        )
+    )
+    result = sync_products(db, catalog)
+    assert result["created"] == 0
+    remains = db.query(Product).filter_by(designation="ramit").all()
+    assert len(remains) == 1
+    assert remains[0].tulip_code == "12445"
+    assert remains[0].reference == "ART12445"

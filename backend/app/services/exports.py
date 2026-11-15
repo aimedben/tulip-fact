@@ -68,6 +68,7 @@ def _line_payload(line) -> dict[str, Any]:
         "unite": line.unit,
         "conditionnement": line.packaging,
         "prix_unitaire_ht": str(line.unit_price_ht) if line.unit_price_ht is not None else None,
+        "prix_vente": str(line.prix_vente) if line.prix_vente is not None else None,
         "tva": str(line.vat_rate) if line.vat_rate is not None else None,
         "montant_ht_extrait": str(line.line_total_ht_extracted) if line.line_total_ht_extracted is not None else None,
         "montant_ht_calcule": str(line.line_total_ht_calculated) if line.line_total_ht_calculated is not None else None,
@@ -139,6 +140,7 @@ def _write_csv(invoice: Invoice, target: Path) -> None:
         "Quantité",
         "Unité",
         "P.U HT",
+        "Prix vente",
         "TVA",
         "Montant HT",
         "Remise",
@@ -180,6 +182,7 @@ def _write_csv(invoice: Invoice, target: Path) -> None:
                     _decimal_csv(line.quantity) if line else "",
                     line.unit if line else "",
                     _decimal_csv(line.unit_price_ht) if line else "",
+                    _decimal_csv(line.prix_vente) if line else "",
                     _decimal_csv(line.vat_rate) if line else "",
                     _decimal_csv(line.line_total_ht_extracted) if line else "",
                     _decimal_csv(line.discount_value) if line else "",
@@ -256,6 +259,7 @@ def _write_xlsx(invoice: Invoice, target: Path) -> None:
         "Quantité",
         "Unité",
         "P.U HT",
+        "Prix vente",
         "TVA",
         "Montant HT",
         "Remise",
@@ -279,6 +283,7 @@ def _write_xlsx(invoice: Invoice, target: Path) -> None:
                 float(line.quantity) if line.quantity is not None else None,
                 line.unit or "",
                 float(line.unit_price_ht) if line.unit_price_ht is not None else None,
+                float(line.prix_vente) if line.prix_vente is not None else None,
                 float(line.vat_rate) if line.vat_rate is not None else None,
                 float(line.line_total_ht_extracted) if line.line_total_ht_extracted is not None else None,
                 float(line.discount_value) if line.discount_value is not None else None,
@@ -286,7 +291,7 @@ def _write_xlsx(invoice: Invoice, target: Path) -> None:
                 line.match_status,
             ]
         )
-    widths = [6, 14, 40, 18, 40, 14, 8, 10, 10, 12, 8, 14, 10, 12, 18]
+    widths = [6, 14, 40, 18, 40, 14, 8, 10, 10, 12, 12, 8, 14, 10, 12, 18]
     for index, width in enumerate(widths, start=1):
         line_sheet.column_dimensions[chr(64 + index)].width = width
     line_sheet.freeze_panes = "A2"

@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+def _app_base_dir() -> Path:
+    """Dossier de l'application : racine du projet en dev, dossier de l'exe en mode figé (PyInstaller)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+PROJECT_ROOT = _app_base_dir()
+# En mode figé, les ressources packagées (static, tessdata) vivent dans _MEIPASS.
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", str(PROJECT_ROOT)))
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 
@@ -32,11 +43,23 @@ def _env_decimal(name: str, default: str) -> Decimal:
         return Decimal(default)
 
 
+VISION_PROVIDER_ALIASES = {
+    "chatgpt": "openai",
+    "gpt": "openai",
+    "nemotron": "opencode",
+}
+
+
+def normalize_vision_provider(provider: str) -> str:
+    value = (provider or "").strip().lower()
+    return VISION_PROVIDER_ALIASES.get(value, value)
+
+
 @dataclass
 class Settings:
     project_root: Path = PROJECT_ROOT
     app_mode: str = field(default_factory=lambda: os.getenv("TULIP_APP_MODE", "production").strip().lower())
-    host: str = field(default_factory=lambda: os.getenv("TULIP_HOST", "127.0.0.1"))
+    host: str = field(default_factory=lambda: os.getenv("TULIP_HOST", "0.0.0.0"))
     port: int = field(default_factory=lambda: _env_int("TULIP_PORT", 8000))
     cors_origins: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173")
 
@@ -48,22 +71,53 @@ class Settings:
     backups_dir: Path = field(init=False)
     archives_dir: Path = field(init=False)
     logs_dir: Path = field(init=False)
-    static_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "backend" / "app" / "static")
+    static_dir: Path = field(
+        default_factory=lambda: (
+            BUNDLE_DIR / "backend" / "app" / "static"
+            if (BUNDLE_DIR / "backend" / "app" / "static").is_dir()
+            else (BUNDLE_DIR / "static" if (BUNDLE_DIR / "static").is_dir() else PROJECT_ROOT / "backend" / "app" / "static")
+        )
+    )
 
     worker_enabled: bool = field(default_factory=lambda: not _env_bool("TULIP_DISABLE_WORKER", False))
     max_upload_mb: int = field(default_factory=lambda: _env_int("TULIP_MAX_UPLOAD_MB", 25))
     allowed_extensions: frozenset[str] = frozenset({".pdf", ".jpg", ".jpeg", ".png"})
     amount_tolerance: Decimal = field(default_factory=lambda: _env_decimal("TULIP_AMOUNT_TOLERANCE", "0.05"))
 
-    ocr_engine: str = field(default_factory=lambda: os.getenv("TULIP_OCR_ENGINE", "tesseract").strip().lower())
+    ocr_engine: str = field(default_factory=lambda: os.getenv("TULIP_OCR_ENGINE", "auto").strip().lower())
     tesseract_cmd: str = field(
-        default_factory=lambda: os.getenv("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+        default_factory=lambda: os.getenv(
+            "TESSERACT_CMD",
+            str(next((p for p in [
+                PROJECT_ROOT / "tesseract" / "tesseract.exe",
+                PROJECT_ROOT / "Tesseract-OCR" / "tesseract.exe",
+                Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+            ] if p.exists()), Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")))
+        )
     )
     tesseract_langs: str = field(default_factory=lambda: os.getenv("TULIP_TESSERACT_LANGS", "fra+eng"))
-    tessdata_dir: Path = field(default_factory=lambda: Path(os.getenv("TESSDATA_PREFIX", str(PROJECT_ROOT / "tessdata"))))
+    tessdata_dir: Path = field(
+        default_factory=lambda: Path(
+            os.getenv(
+                "TESSDATA_PREFIX",
+                str(next((p for p in [PROJECT_ROOT / "tessdata", BUNDLE_DIR / "tessdata"] if p.exists()), PROJECT_ROOT / "tessdata")),
+            )
+        )
+    )
     ocr_psm: int = field(default_factory=lambda: _env_int("TULIP_OCR_PSM", 6))
     ocr_render_dpi: int = field(default_factory=lambda: _env_int("TULIP_OCR_DPI", 300))
     preview_dpi: int = field(default_factory=lambda: _env_int("TULIP_PREVIEW_DPI", 140))
+
+    # Modèle local spécialisé OCR documents (GOT-OCR2_0, ~580M paramètres, 100% local).
+    # TULIP_OCR_ENGINE=got pour l'utiliser ; en auto, utilisé en repli si les
+    # moteurs rapides échouent. Chargé paresseusement (téléchargement ~1,7 Go au
+    # premier lancement, ensuite depuis le cache local).
+    got_ocr_enabled: bool = field(default_factory=lambda: _env_bool("TULIP_GOT_OCR_ENABLED", True))
+    got_ocr_model: str = field(
+        default_factory=lambda: os.getenv("TULIP_GOT_OCR_MODEL", "stepfun-ai/GOT-OCR2_0").strip()
+    )
+    got_ocr_timeout_seconds: int = field(default_factory=lambda: _env_int("TULIP_GOT_OCR_TIMEOUT", 300))
+    got_ocr_cache_dir: str = field(default_factory=lambda: os.getenv("TULIP_GOT_CACHE_DIR", "").strip())
 
     llm_enabled: bool = field(default_factory=lambda: _env_bool("TULIP_LLM_ENABLED", False))
     llm_api_key: str = field(default_factory=lambda: os.getenv("TULIP_LLM_API_KEY", ""))
@@ -77,30 +131,50 @@ class Settings:
     )
     vision_timeout_seconds: int = field(default_factory=lambda: _env_int("TULIP_VISION_TIMEOUT", 240))
 
-    def _vision_env(self, suffix: str, default: str = "") -> str:
-        provider = self.vision_active_provider.upper()
+    def _vision_env(self, suffix: str, default: str = "", provider: str | None = None) -> str:
+        provider = (provider or self.vision_active_provider).upper()
         primary = os.getenv(f"TULIP_VISION_{provider}_{suffix}", "")
         if primary:
             return primary
         return os.getenv(f"TULIP_VISION_{suffix}", default)
 
+    def vision_provider_config(self, provider: str) -> tuple[str, str, str]:
+        """Clé, modèle et URL pour un fournisseur vision donné.
+
+        Les noms « chatgpt » et « nemotron » sont des alias d'interface :
+        OpenAI et le modèle opencode Zen (Nemotron) derrière TULIP_LLM_*.
+        """
+        provider = normalize_vision_provider(provider or self.vision_active_provider) or self.vision_active_provider
+
+        if provider == "opencode":
+            key = os.getenv("TULIP_VISION_OPENCODE_API_KEY") or os.getenv("TULIP_LLM_API_KEY", "")
+            model = os.getenv("TULIP_VISION_OPENCODE_MODEL") or os.getenv("TULIP_LLM_MODEL", "")
+            base_url = os.getenv("TULIP_VISION_OPENCODE_BASE_URL") or os.getenv("TULIP_LLM_BASE_URL", "")
+            return key, model, base_url
+
+        defaults = {
+            "gemini": ("", "gemini-3.8-flash", "https://generativelanguage.googleapis.com/v1beta/openai"),
+            "openai": ("", "gpt-4o-mini", "https://api.openai.com/v1"),
+            "groq": ("", "openai/gpt-oss-120b", "https://api.groq.com/openai/v1"),
+        }
+        _, default_model, default_url = defaults.get(provider, ("", "", ""))
+        return (
+            self._vision_env("API_KEY", provider=provider),
+            self._vision_env("MODEL", default_model, provider=provider),
+            self._vision_env("BASE_URL", default_url, provider=provider),
+        )
+
     @property
     def vision_api_key(self) -> str:
-        return self._vision_env("API_KEY")
+        return self.vision_provider_config(self.vision_active_provider)[0]
 
     @property
     def vision_model(self) -> str:
-        defaults = {"gemini": "gemini-3.8-flash", "openai": "gpt-4o-mini", "groq": "openai/gpt-oss-120b"}
-        return self._vision_env("MODEL", defaults.get(self.vision_active_provider, ""))
+        return self.vision_provider_config(self.vision_active_provider)[1]
 
     @property
     def vision_base_url(self) -> str:
-        defaults = {
-            "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
-            "openai": "https://api.openai.com/v1",
-            "groq": "https://api.groq.com/openai/v1",
-        }
-        return self._vision_env("BASE_URL", defaults.get(self.vision_active_provider, ""))
+        return self.vision_provider_config(self.vision_active_provider)[2]
 
     tulip_integration_mode: str = field(
         default_factory=lambda: os.getenv("TULIP_INTEGRATION_MODE", "export_only").strip().lower()

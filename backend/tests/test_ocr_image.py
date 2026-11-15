@@ -27,5 +27,5 @@ def test_png_photo_ocr_end_to_end(client, seeded, tmp_path: Path):
     assert detail["page_count"] == 1
     assert detail["invoice_number"] == "DEMO-FA-2026-301"
     assert len(detail["lines"]) >= 1
-    assert detail["pages"][0]["ocr_engine"] == "tesseract"
+    assert detail["pages"][0]["ocr_engine"] in {"tesseract", "rapidocr"}
     assert detail["pages"][0]["image_url"].startswith("/api/invoices/")

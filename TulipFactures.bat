@@ -6,7 +6,8 @@ setlocal enabledelayedexpansion
 
 set "APP_DIR=%~dp0"
 set "BACKEND_DIR=%APP_DIR%backend"
-set "VENV_PYTHON=%APP_DIR%.venv\Scripts\python.exe"
+set "VENV_PYTHON=%APP_DIR%.venv38\Scripts\python.exe"
+if not exist "%VENV_PYTHON%" set "VENV_PYTHON=%APP_DIR%.venv\Scripts\python.exe"
 
 REM Vérifier l'environnement virtuel
 if not exist "%VENV_PYTHON%" (
@@ -41,8 +42,19 @@ echo ======================================
 echo Demarrage de Tulip Factures...
 echo ======================================
 echo.
+REM Autoriser l'acces depuis le telephone (une seule fois, fenetre UAC)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_DIR%autoriser-telephone.ps1"
+
+REM Detecter l'adresse IP locale
+"%VENV_PYTHON%" -c "import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.connect(('8.8.8.8',80));print(s.getsockname()[0]);s.close()" > "%TEMP%\tulip_lan_ip.txt" 2>nul
+set "LAN_IP="
+set /p LAN_IP=<"%TEMP%\tulip_lan_ip.txt"
+del "%TEMP%\tulip_lan_ip.txt" >nul 2>&1
+if not defined LAN_IP set "LAN_IP=IP-DU-PC"
+
 echo L'application s'ouvrira dans votre navigateur
-echo URL: http://127.0.0.1:8000
+echo PC: http://127.0.0.1:8000
+echo Telephone (meme Wi-Fi): http://%LAN_IP%:8000
 echo.
 echo Fermez cette fenetre pour arreter le serveur
 echo.
@@ -51,6 +63,9 @@ cd /d "%BACKEND_DIR%"
 
 REM Définir le mode production
 set "TULIP_APP_MODE=production"
+
+REM Ouvrir le navigateur une fois le serveur pret
+start "" /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 5; Start-Process 'http://127.0.0.1:8000'"
 
 REM Démarrer le serveur FastAPI (accessible depuis le réseau local)
 "%VENV_PYTHON%" -m uvicorn app.main:app --host 0.0.0.0 --port 8000

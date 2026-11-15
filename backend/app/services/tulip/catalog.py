@@ -8,7 +8,10 @@ from typing import Any
 from .firebird import FirebirdError, FirebirdIsql, firebird_client
 
 SUPPLIER_FILTER = "C.FRCLT = -1 AND C.ETAT = 0"
-PRODUCT_FILTER = "P.ETAT = 0 AND P.NATURE IN (1, 2, 5, 10)"
+# Natures actives a exposer dans le catalogue. La nature 4 existe chez
+# SUPERETTE (148 articles actifs, 137 avec code-barres, 101 deja vendus) :
+# l'exclure faisait disparaitre de vrais articles visibles dans Tulip.
+PRODUCT_FILTER = "P.ETAT = 0 AND P.NATURE IN (1, 2, 4, 5, 10)"
 TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_$#]{0,30}$")
 
 
@@ -440,6 +443,7 @@ ORDER BY D.ITEM
             "phone": _text(row.get("PHONE")),
             "email": _text(row.get("EMAIL")),
             "address": address,
+            "city": _text(row.get("CITY")),
             "notes": None,
             "active": True,
             "source": "tulip",
@@ -454,6 +458,7 @@ ORDER BY D.ITEM
             "tulip_id": int(code) if code else None,
             "tulip_code": ref or code,
             "ref": ref,
+            "reference": ref,
             "supplier_ref": _text(row.get("REF_O")),
             "barcode": _text(row.get("BARCODE")),
             "designation": _text(row.get("DESIGNATION")) or ref or code or "",

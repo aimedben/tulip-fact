@@ -1,3 +1,5 @@
+export type ReprocessMethod = "auto" | "ocr" | "gemini" | "chatgpt" | "nemotron";
+
 export type InvoiceStatus =
   | "IMPORTEE"
   | "EXTRACTION"
@@ -16,13 +18,25 @@ export interface Supplier {
   phone: string | null;
   email: string | null;
   address: string | null;
+  city: string | null;
+  mf: string | null;
+  nis: string | null;
   notes: string | null;
   active: boolean;
+  tulip_push?: {
+    pushed: boolean;
+    error?: string;
+    reason?: string;
+    table?: string;
+    code?: number | string | null;
+    principal?: string | null;
+  };
 }
 
 export interface Product {
   id: number;
   tulip_code: string;
+  reference: string | null;
   supplier_ref: string | null;
   barcode: string | null;
   designation: string;
@@ -31,12 +45,21 @@ export interface Product {
   stock_unit: string | null;
   default_vat_rate: number | null;
   active: boolean;
+  tulip_push?: {
+    pushed: boolean;
+    error?: string;
+    reason?: string;
+    table?: string;
+    code?: string | number;
+    designation?: string;
+  };
 }
 
 export interface ProductCandidate {
   product_id: number;
   tulip_code: string;
   designation: string;
+  reference?: string | null;
   supplier_ref?: string | null;
   barcode?: string | null;
   packaging?: string | null;
@@ -89,6 +112,7 @@ export interface InvoiceLine {
   line_total_ht_calculated: number | null;
   discount_value: number | null;
   discount_type: string | null;
+  prix_vente: number | null;
   confidence: Record<string, number | boolean | string>;
   source_page: number | null;
   source_bbox: { x0: number; y0: number; x1: number; y1: number } | null;
@@ -370,4 +394,23 @@ export interface HealthData {
   storage: boolean;
   ocr: { available: boolean; languages: string[] };
   demo: boolean;
+}
+
+export interface AccessInfo {
+  port: number;
+  primary_url: string | null;
+  primary_ip: string | null;
+  candidates: { ip: string; url: string; reachable: boolean }[];
+  local_url: string;
+  hint: string;
+}
+
+export interface TulipExportResult {
+  exported: boolean;
+  error?: string;
+  be_code?: number | string;
+  numero?: number | string;
+  lines?: number;
+  issues?: unknown[];
+  skipped_lines?: unknown[];
 }

@@ -183,6 +183,7 @@ class BeWriter:
             "puht": line.unit_price_ht,
             "qte": line.quantity,
             "remise": line.remise,
+            "mprix": line.mprix,
         }
 
     def create_be(self, header: BeHeader, lines: list[LineItem], dry_run: bool = True) -> dict[str, Any]:

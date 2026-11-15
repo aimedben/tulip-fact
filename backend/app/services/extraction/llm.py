@@ -86,16 +86,19 @@ class LlmExtractor:
             return None
         if len(text.strip()) < 20:
             return None
-        payload = {
+        payload: dict = {
             "model": settings.llm_model,
             "temperature": 0,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": USER_TEMPLATE.format(text=text[:12000])},
             ],
-            "response_format": {"type": "json_object"},
         }
-        url = settings.llm_base_url.rstrip("/") + "/chat/completions"
+        # json_object mode n'est pas supporté par tous les providers (ex: opencode)
+        base_url = settings.llm_base_url.rstrip("/")
+        if "openai.com" in base_url or "azure" in base_url:
+            payload["response_format"] = {"type": "json_object"}
+        url = base_url + "/chat/completions"
         try:
             with httpx.Client(timeout=settings.llm_timeout_seconds) as client:
                 response = client.post(
@@ -108,8 +111,15 @@ class LlmExtractor:
             content = body["choices"][0]["message"]["content"]
             data = json.loads(content)
             return LlmInvoice.model_validate(data)
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "Extraction LLM ignorée : HTTP %s — %s",
+                exc.response.status_code,
+                exc.response.text[:200],
+            )
+            return None
         except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValidationError) as exc:
-            logger.warning("Extraction LLM ignorée après erreur : %s", type(exc).__name__)
+            logger.warning("Extraction LLM ignorée après erreur : %s — %s", type(exc).__name__, exc)
             return None
 
 

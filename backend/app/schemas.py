@@ -51,6 +51,7 @@ class LineUpdate(BaseModel):
     unit: str | None = Field(default=None, max_length=32)
     packaging: str | None = Field(default=None, max_length=64)
     unit_price_ht: Decimal | None = Field(default=None, ge=0)
+    prix_vente: Decimal | None = Field(default=None, ge=0)
     vat_rate: Decimal | None = Field(default=None, ge=0, le=100)
     line_total_ht_extracted: Decimal | None = None
     discount_value: Decimal | None = Field(default=None, ge=0)
@@ -74,6 +75,7 @@ class ProductConfirm(BaseModel):
 class NewProductFromLine(BaseModel):
     designation: str | None = Field(default=None, max_length=255)
     tulip_code: str | None = Field(default=None, max_length=64)
+    reference: str | None = Field(default=None, max_length=64)
     supplier_ref: str | None = Field(default=None, max_length=64)
     packaging: str | None = Field(default=None, max_length=128)
     stock_unit: str | None = Field(default=None, max_length=32)
@@ -81,7 +83,7 @@ class NewProductFromLine(BaseModel):
 
 
 class ValidateRequest(BaseModel):
-    actor: str = Field(default="utilisateur", max_length=128)
+    actor: str = Field(default="Administrateur", max_length=128)
     acknowledge_duplicate: bool = False
     acknowledge_totals: bool = False
     acknowledge_warnings: bool = False
@@ -91,17 +93,21 @@ class ExportRequest(BaseModel):
     formats: list[Literal["csv", "xlsx", "json", "rapport"]] = Field(
         default_factory=lambda: ["csv", "xlsx", "json", "rapport"]
     )
-    actor: str = Field(default="utilisateur", max_length=128)
+    actor: str = Field(default="Administrateur", max_length=128)
 
 
 class SupplierCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=64)
+    # Vide = code Tulip choisi automatiquement (PRINCIPAL suivant).
+    code: str | None = Field(default=None, max_length=64)
     name: str = Field(min_length=1, max_length=255)
     name_variants: list[str] = Field(default_factory=list)
     tax_id: str | None = Field(default=None, max_length=64)
     phone: str | None = Field(default=None, max_length=64)
     email: str | None = Field(default=None, max_length=255)
     address: str | None = None
+    city: str | None = Field(default=None, max_length=100)
+    mf: str | None = Field(default=None, max_length=20)
+    nis: str | None = Field(default=None, max_length=20)
     notes: str | None = None
 
 
@@ -112,13 +118,18 @@ class SupplierUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=64)
     email: str | None = Field(default=None, max_length=255)
     address: str | None = None
+    city: str | None = Field(default=None, max_length=100)
+    mf: str | None = Field(default=None, max_length=20)
+    nis: str | None = Field(default=None, max_length=20)
     notes: str | None = None
     active: bool | None = None
 
 
 class ProductCreate(BaseModel):
-    tulip_code: str = Field(min_length=1, max_length=64)
+    # Vide = code article Tulip choisi automatiquement (CODE suivant).
+    tulip_code: str | None = Field(default=None, max_length=64)
     designation: str = Field(min_length=1, max_length=255)
+    reference: str | None = Field(default=None, max_length=64)
     supplier_ref: str | None = Field(default=None, max_length=64)
     barcode: str | None = Field(default=None, max_length=64)
     brand: str | None = Field(default=None, max_length=128)
@@ -129,6 +140,7 @@ class ProductCreate(BaseModel):
 
 class ProductUpdate(BaseModel):
     designation: str | None = Field(default=None, min_length=1, max_length=255)
+    reference: str | None = Field(default=None, max_length=64)
     supplier_ref: str | None = Field(default=None, max_length=64)
     barcode: str | None = Field(default=None, max_length=64)
     brand: str | None = Field(default=None, max_length=128)

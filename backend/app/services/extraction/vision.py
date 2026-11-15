@@ -9,29 +9,41 @@ from pathlib import Path
 import httpx
 from pydantic import ValidationError
 
-from ...config import settings
+from ...config import normalize_vision_provider, settings
 from .llm import LlmInvoice
 
 logger = logging.getLogger(__name__)
 
 _COOLDOWN_SECONDS = 600
-_cooldown_until = 0.0
-_cooldown_reason = ""
+_cooldown_until: dict[str, float] = {}
+_cooldown_reason: dict[str, str] = {}
 
 
-def _start_cooldown(status_code: int) -> None:
-    global _cooldown_until, _cooldown_reason
-    _cooldown_until = time.time() + _COOLDOWN_SECONDS
-    _cooldown_reason = (
-        f"Quota/clé vision indisponible (HTTP {status_code}) : "
-        "IA vision ignorée pendant 10 minutes, OCR seul utilisé."
-    )
-    logger.warning(_cooldown_reason)
+def _provider_name(provider: str | None) -> str:
+    return normalize_vision_provider(provider or settings.vision_active_provider)
 
 
-def cooldown_status() -> tuple[bool, str]:
-    remaining = int(max(0, _cooldown_until - time.time()))
-    return remaining > 0, _cooldown_reason if remaining > 0 else ""
+def _start_cooldown(provider: str, status_code: int) -> None:
+    labels = {"gemini": "Gemini", "openai": "ChatGPT", "opencode": "Nemotron (opencode)"}
+    label = labels.get(provider, provider)
+    _cooldown_until[provider] = time.time() + _COOLDOWN_SECONDS
+    if provider == "opencode" and status_code == 429:
+        _cooldown_reason[provider] = (
+            "Nemotron gratuit (opencode) est réservé au client OpenCode (HTTP 429). "
+            "Utilisez OpenCode Go ou une clé payante ; OCR seul utilisé pendant 10 minutes."
+        )
+    else:
+        _cooldown_reason[provider] = (
+            f"Quota/clé {label} indisponible (HTTP {status_code}) : "
+            "IA vision ignorée pendant 10 minutes, OCR seul utilisé."
+        )
+    logger.warning(_cooldown_reason[provider])
+
+
+def cooldown_status(provider: str | None = None) -> tuple[bool, str]:
+    provider = _provider_name(provider)
+    remaining = int(max(0, _cooldown_until.get(provider, 0.0) - time.time()))
+    return remaining > 0, _cooldown_reason.get(provider, "") if remaining > 0 else ""
 
 SYSTEM_PROMPT = (
     "Tu es un lecteur de factures fournisseurs algériennes. Tu lis les images des pages"
@@ -155,36 +167,57 @@ def _build_content(page_paths: list[Path], ocr_text: str | None) -> list[dict]:
 class VisionExtractor:
     """Extraction structurée directement depuis les images de pages (multimodale)."""
 
+    def available_for(self, provider: str | None = None) -> bool:
+        key, model, base_url = settings.vision_provider_config(_provider_name(provider))
+        return bool(key and model and base_url)
+
     @property
     def available(self) -> bool:
-        return bool(settings.vision_enabled and settings.vision_api_key and settings.vision_model)
+        return bool(settings.vision_enabled and self.available_for())
 
-    def extract(self, page_paths: list[Path], ocr_text: str | None = None) -> LlmInvoice | None:
-        if not self.available:
+    def extract(
+        self,
+        page_paths: list[Path],
+        ocr_text: str | None = None,
+        provider: str | None = None,
+        force: bool = False,
+    ) -> LlmInvoice | None:
+        provider = _provider_name(provider)
+        if not force and not settings.vision_enabled:
             return None
-        if cooldown_status()[0]:
+        key, model, base_url = settings.vision_provider_config(provider)
+        if not key or not model or not base_url:
+            logger.warning("Fournisseur vision %s incomplet (clé/modèle/URL).", provider)
+            return None
+        if cooldown_status(provider)[0]:
             return None
         usable = [path for path in page_paths if path.is_file()][:MAX_IMAGE_PAGES]
         if not usable:
             return None
-        url = settings.vision_base_url.rstrip("/") + "/chat/completions"
+        url = base_url.rstrip("/") + "/chat/completions"
         payload = {
-            "model": settings.vision_model,
+            "model": model,
             "temperature": 0,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": _build_content(usable, ocr_text)},
             ],
         }
+        if provider == "opencode":
+            timeout = settings.llm_timeout_seconds
+        elif force:
+            # Choix explicite dans l'interface : échec rapide plutôt qu'attente longue.
+            timeout = min(30, settings.vision_timeout_seconds)
+        else:
+            timeout = min(90, settings.vision_timeout_seconds)
+        max_attempts = 1 if force else 2
         try:
             last_error: Exception | None = None
             body: dict | None = None
-            for attempt in range(2):
+            for attempt in range(max_attempts):
                 try:
-                    with httpx.Client(timeout=min(90, settings.vision_timeout_seconds)) as client:
-                        response = client.post(
-                            url, headers={"Authorization": f"Bearer {settings.vision_api_key}"}, json=payload
-                        )
+                    with httpx.Client(timeout=timeout) as client:
+                        response = client.post(url, headers={"Authorization": f"Bearer {key}"}, json=payload)
                         response.raise_for_status()
                         body = response.json()
                     break
@@ -192,22 +225,24 @@ class VisionExtractor:
                     last_error = exc
                     status_code = exc.response.status_code
                     if status_code in (429, 401, 403) or "insufficient_quota" in exc.response.text:
-                        _start_cooldown(status_code)
+                        _start_cooldown(provider, status_code)
                         raise
-                    if status_code in (503, 500) and attempt < 1:
+                    if status_code in (503, 500) and attempt < max_attempts - 1:
                         time.sleep(5)
                         continue
                     raise
                 except httpx.TransportError as exc:
                     last_error = exc
-                    if attempt < 1:
+                    if attempt < max_attempts - 1:
                         time.sleep(4)
                         continue
                     raise
             if body is None:
                 if isinstance(last_error, httpx.HTTPStatusError):
                     logger.warning(
-                        "Extraction vision rejetée : HTTP %s", last_error.response.status_code
+                        "Extraction vision %s rejetée : HTTP %s",
+                        provider,
+                        last_error.response.status_code,
                     )
                 return None
             content = body["choices"][0]["message"]["content"]
@@ -219,10 +254,12 @@ class VisionExtractor:
                 body_text = exc.response.text[:300]
             except Exception:  # noqa: BLE001
                 pass
-            logger.warning("Extraction vision rejetée : HTTP %s — %s", exc.response.status_code, body_text)
+            logger.warning(
+                "Extraction vision %s rejetée : HTTP %s — %s", provider, exc.response.status_code, body_text
+            )
             return None
         except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, ValidationError, ValueError) as exc:
-            logger.warning("Extraction vision ignorée après erreur : %s", type(exc).__name__)
+            logger.warning("Extraction vision %s ignorée après erreur : %s", provider, type(exc).__name__)
             return None
 
 

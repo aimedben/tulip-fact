@@ -1,0 +1,57 @@
+==================== LISEZ-MOI - PC SUPERETTE (HORS CONNEXION) ====================
+
+AUCUNE INSTALLATION - AUCUN INTERNET.
+Tout est deja dans ce dossier : Python, le serveur, l'interface, l'OCR,
+le client Firebird, les runtimes Windows et un navigateur Firefox portable.
+L'application ne cree JAMAIS de base : elle se connecte a celle qui existe.
+
+ETAPES (dans l'ordre) :
+
+1) Copier le dossier TulipFactures SUR LE DISQUE DUR du PC
+   (pas C:\Windows, pas C:\Program Files, pas depuis une cle USB -
+    par ex. C:\TulipFactures)
+
+2) Double-cliquer :  1-REGLER-CONNEXION-TULIP.bat
+   -> ouvre la fenetre "Configuration de la connexion Tulip"
+   -> elle detecte automatiquement la base SUPERETTE.TFE et le client
+      Firebird fourni dans le dossier (firebird\bin\isql.exe)
+   -> si un champ reste vide : cliquer "Detecter automatiquement"
+      (recherche sur ce PC ET sur le reseau local - aucun chemin a connaitre)
+   -> cliquer "Tester la connexion" : OK - 2.5.9 s'affiche si tout est bon
+   -> cliquer "Enregistrer" : la liaison est ecrite dans le fichier .env
+   -> la case "Autoriser l'ecriture dans Tulip" regle l'ecriture
+      (a cocher seulement apres un premier essai en lecture seule)
+
+3) Double-cliquer :  TulipFactures.exe
+   -> dans la fenetre, la ligne "Base Tulip (GCP) : ..." confirme la liaison
+   -> le tableau de bord s'ouvre dans le Firefox portable du dossier
+   (le bouton "Connexion Tulip..." permet de rouvrir la configuration)
+
+CE QUI EST PARTAGE AVEC LE LOGICIEL TULIP (GCP) :
+   - La meme base SUPERETTE.TFE : tout ce que vous modifiez dans l'app
+     (articles, fournisseurs, bons d'achat) apparait instantanement dans GCP.
+
+SI LE TEST AFFICHE UNE ERREUR :
+   - "api-ms-win-crt... introuvable" : la copie du dossier est incomplete ;
+     recopiez TOUT le dossier (les DLL api-ms-win-*.dll et ucrtbase.dll
+     doivent etre a la racine, a cote de TulipFactures.exe).
+   - "Utilisateur ou mot de passe refuse" : retapez le mot de passe Firebird
+     (par defaut SYSDBA / masterkey).
+   - "Serveur Firebird injoignable" : lancez d'abord le logiciel Tulip/GCP
+     ou verifiez l'hote et le port 3050.
+   - "Base inaccessible / Base introuvable" :
+        * lancez d'abord le logiciel Tulip, ou
+        * renseignez dans la fenetre de configuration :
+             Serveur (hote) = <ip-du-PC-qui-a-la-base>
+             Fichier de base = <chemin de la base sur ce PC>
+   - Puis relancez  1-REGLER-CONNEXION-TULIP.bat  et TulipFactures.exe
+
+ACCES TELEPHONE (QR) :
+   - l'icone QR en haut du tableau de bord donne http://<ip-du-pc>:8000
+   - autorisez le port 8000 dans le pare-feu Windows (reseau prive)
+
+REMARQUE : le dossier "data" contient la base de l'application
+(tulip_factures.db). Ne le supprimez pas : il garde vos factures importees.
+
+Details complets : INSTALLATION_PORTABLE.md
+====================================================================================

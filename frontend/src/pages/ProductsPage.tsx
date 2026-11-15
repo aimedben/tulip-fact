@@ -5,12 +5,14 @@ import { EmptyState, PageHeader, Pagination, Panel, Spinner } from "../component
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
 import { CatalogImport } from "../components/CatalogImport";
+import { BarcodeScanInput } from "../components/BarcodeScanInput";
 import { useToast } from "../components/Toast";
 import { parseAmount } from "../lib/format";
 
 interface ProductForm {
   tulip_code: string;
   designation: string;
+  reference: string;
   supplier_ref: string;
   barcode: string;
   brand: string;
@@ -23,6 +25,7 @@ interface ProductForm {
 const emptyForm: ProductForm = {
   tulip_code: "",
   designation: "",
+  reference: "",
   supplier_ref: "",
   barcode: "",
   brand: "",
@@ -44,6 +47,10 @@ export function ProductsPage() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [pendingBarcode, setPendingBarcode] = useState("");
   const { show: toast } = useToast();
 
   const syncFromTulip = async () => {
@@ -95,21 +102,53 @@ export function ProductsPage() {
     setFormOpen(true);
   };
 
+  const lookupBarcode = async (barcode: string) => {
+    setScanLoading(true);
+    setScanError(null);
+    try {
+      const product = await api.getProductByBarcode(barcode);
+      setScanOpen(false);
+      setEditing(product);
+      setFormOpen(true);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setScanOpen(false);
+        setEditing(null);
+        setPendingBarcode(barcode);
+        setFormOpen(true);
+      } else {
+        setScanError(err instanceof Error ? err.message : "Recherche impossible.");
+      }
+    } finally {
+      setScanLoading(false);
+    }
+  };
+
   return (
     <>
       <PageHeader
-        title="Référentiel articles"
-        subtitle="Le rapprochement s'appuie sur le code Tulip, la référence fournisseur, le code-barres et la désignation."
+        title="Articles"
+        subtitle="Chaque article ajouté ici est enregistré dans Tulip en même temps."
         actions={
           <>
             <button type="button" className="button" disabled={syncing} onClick={syncFromTulip}>
-              {syncing ? <Spinner label="Récupération…" /> : <Icon name="download" size={16} />} Récupérer depuis Tulip
+              {syncing ? <Spinner label="Mise à jour…" /> : <Icon name="download" size={16} />} Mettre à jour depuis Tulip
             </button>
             <button type="button" className="button" onClick={() => setShowImport((value) => !value)}>
-              <Icon name="upload" size={16} /> Import CSV / XLSX
+              <Icon name="upload" size={16} /> Importer une liste
+            </button>
+            <button
+              type="button"
+              className="button"
+              onClick={() => {
+                setScanError(null);
+                setScanOpen(true);
+              }}
+            >
+              <Icon name="barcode" size={16} /> Scanner un code-barres
             </button>
             <button type="button" className="button button-primary" onClick={openCreate}>
-              <Icon name="plus" size={16} /> Nouvel article
+              <Icon name="plus" size={16} /> Ajouter un article
             </button>
           </>
         }
@@ -168,15 +207,15 @@ export function ProductsPage() {
         {data && data.items.length === 0 ? (
           <EmptyState
             icon="products"
-            title={appliedQuery ? "Aucun article trouvé" : "Référentiel articles vide"}
+            title={appliedQuery ? "Aucun article trouvé" : "Aucun article"}
             description={
               appliedQuery
-                ? "Essayez un autre terme ou importez le référentiel depuis un fichier."
-                : "Importez les articles Tulip ou créez une fiche pour activer le rapprochement automatique."
+                ? "Essayez un autre mot, ou mettez à jour depuis Tulip."
+                : "Cliquez sur « Ajouter un article » pour commencer."
             }
             action={
               <button type="button" className="button button-primary" onClick={openCreate}>
-                <Icon name="plus" size={16} /> Nouvel article
+                <Icon name="plus" size={16} /> Ajouter un article
               </button>
             }
           />
@@ -187,6 +226,7 @@ export function ProductsPage() {
                 <tr>
                   <th>Code Tulip</th>
                   <th>Désignation</th>
+                  <th>Réf. article</th>
                   <th>Réf. fournisseur</th>
                   <th>Code-barres</th>
                   <th>Conditionnement</th>
@@ -203,6 +243,7 @@ export function ProductsPage() {
                       <strong>{product.designation}</strong>
                       {product.brand && <div className="muted small">{product.brand}</div>}
                     </td>
+                    <td className="mono small">{product.reference ?? "—"}</td>
                     <td className="mono small">{product.supplier_ref ?? "—"}</td>
                     <td className="mono small">{product.barcode ?? "—"}</td>
                     <td className="small">
@@ -235,12 +276,39 @@ export function ProductsPage() {
       <ProductFormModal
         open={formOpen}
         product={editing}
-        onClose={() => setFormOpen(false)}
+        initialBarcode={pendingBarcode}
+        onClose={() => {
+          setFormOpen(false);
+          setPendingBarcode("");
+        }}
         onSaved={() => {
           setFormOpen(false);
+          setPendingBarcode("");
           refresh();
         }}
       />
+
+      <Modal
+        open={scanOpen}
+        title="Scanner un code-barres"
+        subtitle="Douchette USB ou saisie manuelle : le produit est recherché dans le référentiel."
+        onClose={() => {
+          setScanOpen(false);
+          setScanError(null);
+        }}
+        footer={
+          <button type="button" className="button" onClick={() => setScanOpen(false)}>
+            Fermer
+          </button>
+        }
+      >
+        <BarcodeScanInput onScan={lookupBarcode} busy={scanLoading} />
+        {scanError && <p className="inline-error">{scanError}</p>}
+        <p className="muted tiny">
+          Scannez un article : s'il existe, sa fiche s'ouvre pour consultation. Sinon, le formulaire de création est
+          prérempli avec le code-barres.
+        </p>
+      </Modal>
     </>
   );
 }
@@ -248,11 +316,13 @@ export function ProductsPage() {
 function ProductFormModal({
   open,
   product,
+  initialBarcode = "",
   onClose,
   onSaved,
 }: {
   open: boolean;
   product: Product | null;
+  initialBarcode?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -268,6 +338,7 @@ function ProductFormModal({
       setForm({
         tulip_code: product.tulip_code,
         designation: product.designation,
+        reference: product.reference ?? "",
         supplier_ref: product.supplier_ref ?? "",
         barcode: product.barcode ?? "",
         brand: product.brand ?? "",
@@ -277,18 +348,19 @@ function ProductFormModal({
         active: product.active,
       });
     } else {
-      setForm(emptyForm);
+      setForm({ ...emptyForm, barcode: initialBarcode });
     }
-  }, [open, product]);
+  }, [open, product, initialBarcode]);
 
   const set = (key: keyof ProductForm, value: string | boolean) =>
     setForm((current) => ({ ...current, [key]: value }));
 
   const submit = async () => {
-    if (!form.tulip_code.trim() || !form.designation.trim()) {
-      setError("Le code Tulip et la désignation sont obligatoires.");
+    if (!form.designation.trim()) {
+      setError("Le nom de l'article est obligatoire.");
       return;
     }
+
     const rate = form.default_vat_rate.trim() === "" ? null : parseAmount(form.default_vat_rate);
     if (form.default_vat_rate.trim() !== "" && (rate === null || rate < 0 || rate > 100)) {
       setError("Le taux de TVA doit être un nombre entre 0 et 100.");
@@ -298,6 +370,7 @@ function ProductFormModal({
     setError(null);
     const payload: Record<string, unknown> = {
       designation: form.designation.trim(),
+      reference: form.reference.trim() || null,
       supplier_ref: form.supplier_ref.trim() || null,
       barcode: form.barcode.trim() || null,
       brand: form.brand.trim() || null,
@@ -310,11 +383,19 @@ function ProductFormModal({
         payload.active = form.active;
         await api.updateProduct(product.id, payload);
         show("Article mis à jour.", "success");
+        onSaved();
       } else {
-        await api.createProduct({ ...payload, tulip_code: form.tulip_code.trim() });
-        show("Article créé.", "success");
+        const result = await api.createProduct(payload);
+        if (result.tulip_push?.pushed) {
+          show(
+            `Enregistré dans Tulip — article n° ${result.tulip_push?.code ?? result.tulip_code}.`,
+            "success",
+          );
+        } else {
+          show(result.tulip_push?.reason ?? "Article enregistré dans l'application.", "warning");
+        }
+        onSaved();
       }
-      onSaved();
     } catch (err) {
       const message = err instanceof ApiError || err instanceof Error ? err.message : "Enregistrement impossible.";
       setError(message);
@@ -327,8 +408,12 @@ function ProductFormModal({
   return (
     <Modal
       open={open}
-      title={product ? "Modifier l'article" : "Nouvel article"}
-      subtitle={product ? `${product.tulip_code} — ${product.designation}` : "Le code doit correspondre au code article Tulip."}
+      title={product ? "Modifier l'article" : "Ajouter un article"}
+      subtitle={
+        product
+          ? `${product.tulip_code} — ${product.designation}`
+          : "Le numéro d'article est attribué automatiquement par Tulip."
+      }
       onClose={onClose}
       wide
       footer={
@@ -343,18 +428,34 @@ function ProductFormModal({
       }
     >
       <div className="form-grid">
-        <label className="field">
-          <span>Code Tulip *</span>
+        {product && (
+          <label className="field">
+            <span>Numéro Tulip</span>
+            <input value={form.tulip_code} readOnly className="mono" />
+            <small className="muted">Attribué par Tulip, non modifiable.</small>
+          </label>
+        )}
+        <label className={`field${product ? "" : " full"}`}>
+          <span>Nom de l'article *</span>
           <input
-            value={form.tulip_code}
-            onChange={(event) => set("tulip_code", event.target.value)}
-            disabled={Boolean(product)}
-            className="mono"
+            value={form.designation}
+            onChange={(event) => set("designation", event.target.value)}
+            placeholder="Ex. : HUILE FLEUR 1L"
+            autoFocus
           />
         </label>
         <label className="field">
-          <span>Désignation *</span>
-          <input value={form.designation} onChange={(event) => set("designation", event.target.value)} />
+          <span>Code-barres</span>
+          <input value={form.barcode} onChange={(event) => set("barcode", event.target.value)} className="mono" />
+        </label>
+        <label className="field">
+          <span>Taux de TVA (%)</span>
+          <input
+            inputMode="decimal"
+            value={form.default_vat_rate}
+            onChange={(event) => set("default_vat_rate", event.target.value)}
+            placeholder="19"
+          />
         </label>
         <label className="field">
           <span>Référence fournisseur</span>
@@ -365,8 +466,13 @@ function ProductFormModal({
           />
         </label>
         <label className="field">
-          <span>Code-barres</span>
-          <input value={form.barcode} onChange={(event) => set("barcode", event.target.value)} className="mono" />
+          <span>Réf. article (Tulip)</span>
+          <input
+            value={form.reference}
+            onChange={(event) => set("reference", event.target.value)}
+            className="mono"
+            placeholder="Laissez vide : Tulip la crée"
+          />
         </label>
         <label className="field">
           <span>Marque</span>
@@ -380,15 +486,6 @@ function ProductFormModal({
           <span>Unité de stock</span>
           <input value={form.stock_unit} onChange={(event) => set("stock_unit", event.target.value)} placeholder="UNITE, CARTON…" />
         </label>
-        <label className="field">
-          <span>Taux de TVA par défaut (%)</span>
-          <input
-            inputMode="decimal"
-            value={form.default_vat_rate}
-            onChange={(event) => set("default_vat_rate", event.target.value)}
-            placeholder="19"
-          />
-        </label>
         {product && (
           <label className="checkbox full">
             <input type="checkbox" checked={form.active} onChange={(event) => set("active", event.target.checked)} />
@@ -398,8 +495,7 @@ function ProductFormModal({
       </div>
       {error && <p className="inline-error">{error}</p>}
       <p className="muted tiny">
-        Une référence fournisseur confirmée lors du rapprochement est réutilisée automatiquement pour les prochaines factures
-        du même fournisseur.
+        Le nom suffit : Tulip attribue le numéro d'article et la référence.
       </p>
     </Modal>
   );

@@ -242,7 +242,7 @@ export function ImportPage() {
 
           <Panel
             title={items.length > 0 ? `File d'import (${items.length})` : "File d'import"}
-            subtitle="Chaque document est envoyé puis analysé par l'OCR local."
+            subtitle="Chaque document est lu automatiquement sur cet ordinateur."
             actions={
               items.some((item) => item.status === "done" || item.status === "error") ? (
                 <button

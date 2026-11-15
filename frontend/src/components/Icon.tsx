@@ -31,7 +31,18 @@ export type IconName =
   | "save"
   | "folder"
   | "spark"
-  | "menu";
+  | "barcode"
+  | "menu"
+  | "spinner"
+  | "x"
+  | "sparkles"
+  | "arrow-right"
+  | "list"
+  | "plus-circle"
+  | "alert-triangle"
+  | "check-circle"
+  | "edit"
+  | "qr";
 
 const paths: Record<IconName, ReactNode> = {
   dashboard: (
@@ -201,7 +212,79 @@ const paths: Record<IconName, ReactNode> = {
       <path d="m6 6 3 3M15 15l3 3M18 6l-3 3M9 15l-3 3" />
     </>
   ),
+  barcode: (
+    <>
+      <path d="M4 5v14M7 5v14M10 5v10M13 5v14M16 5v10M19 5v14" />
+    </>
+  ),
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,
+  spinner: (
+    <>
+      <path d="M12 2v4" />
+      <path d="m16.2 7.8 2.9-2.9" />
+      <path d="M18 12h4" />
+      <path d="m16.2 16.2 2.9 2.9" />
+      <path d="M12 18v4" />
+      <path d="m4.9 19.1 2.9-2.9" />
+      <path d="M2 12h4" />
+      <path d="m4.9 4.9 2.9 2.9" />
+    </>
+  ),
+  // Alias utilisés par les sélecteurs de fournisseur (noms lucide).
+  x: <path d="M18 6 6 18M6 6l12 12" />,
+  sparkles: (
+    <>
+      <path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3Z" />
+      <path d="M19 15l.8 1.9 1.9.8-1.9.8L19 20.4l-.8-1.9-1.9-.8 1.9-.8L19 15Z" />
+      <path d="M5 14l.7 1.6 1.6.7-1.6.7L5 18.6l-.7-1.6-1.6-.7 1.6-.7L5 14Z" />
+    </>
+  ),
+  "arrow-right": (
+    <>
+      <path d="M5 12h14" />
+      <path d="m13 18 6-6-6-6" />
+    </>
+  ),
+  list: <path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" />,
+  "plus-circle": (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 8v8M8 12h8" />
+    </>
+  ),
+  "alert-triangle": (
+    <>
+      <path d="M10.3 3.6 2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z" />
+      <path d="M12 9v4M12 17h.01" />
+    </>
+  ),
+  "check-circle": (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8.5 12 2.5 2.5 4.5-5" />
+    </>
+  ),
+  edit: (
+    <>
+      <path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 3 21l.5-4.5L17 3Z" />
+    </>
+  ),
+  qr: (
+    <>
+      <rect x="3" y="3" width="5" height="5" rx="1" />
+      <rect x="16" y="3" width="5" height="5" rx="1" />
+      <rect x="3" y="16" width="5" height="5" rx="1" />
+      <path d="M21 16h-3a2 2 0 0 0-2 2v3" />
+      <path d="M21 21v.01" />
+      <path d="M12 7v3a2 2 0 0 1-2 2H7" />
+      <path d="M3 12h.01" />
+      <path d="M12 3h.01" />
+      <path d="M12 16v.01" />
+      <path d="M16 12h1" />
+      <path d="M21 12v.01" />
+      <path d="M12 21v-1" />
+    </>
+  ),
 };
 
 export function Icon({

@@ -1,0 +1,68 @@
+==========================================================
+   TULIP FACTURES   -   A LIRE EN PREMIER
+==========================================================
+
+Ce dossier contient l'application complete :
+rien a installer, pas besoin d'Internet.
+
+
+----------------------------------------------------------
+IMPORTANT : NE PAS LANCER DIRECTEMENT DEPUIS LA CLE USB
+----------------------------------------------------------
+Copiez d'abord le dossier "TulipFactures" sur le disque dur
+du PC, par exemple :
+
+      C:\TulipFactures
+
+(pas C:\Program Files, pas C:\Windows, pas depuis la cle USB)
+
+
+----------------------------------------------------------
+LES 4 ETAPES
+----------------------------------------------------------
+
+1) Copier le dossier TulipFactures sur C:\
+   (exemple : C:\TulipFactures)
+
+   Le sous-dossier "data" est deja pret : il contient la base
+   de l'application (vide au depart). Ne le supprimez pas, il
+   gardera vos factures importees.
+
+2) Double-cliquer :   1-REGLER-CONNEXION-TULIP.bat
+   -> la fenetre "Configuration de la connexion Tulip" s'ouvre
+   -> indiquer le serveur et la base (ou la detection automatique)
+   -> cliquer "Tester la connexion"   =>  OK - 2.5.9
+   -> cliquer "Enregistrer"
+
+   SI LA DETECTION NE MARCHE PAS, utiliser a la place :
+        1b-CONNEXION-AUTOMATIQUE.bat
+   (ce script essaie tout seul tous les chemins possibles de la
+    base, teste avec isql, puis ecrit le fichier .env)
+
+3) Double-cliquer :   TulipFactures.exe
+
+4) Envoyer UNE facture, puis verifier dans Tulip GC
+   qu'elle apparait bien dans les bons d'entree.
+   C'est le seul test qui prouve que tout fonctionne.
+
+
+----------------------------------------------------------
+TELEPHONE (optionnel)
+----------------------------------------------------------
+CLIC DROIT sur   4-AUTORISER-TELEPHONE.bat
+   -> "Executer en tant qu'administrateur"   -> Oui
+
+Puis sur le telephone (meme Wi-Fi que le PC) :
+
+      http://IP-DU-PC:8000
+
+Ne jamais taper "localhost" sur le telephone : cela designe
+le telephone lui-meme.
+
+
+----------------------------------------------------------
+EN CAS DE PROBLEME
+----------------------------------------------------------
+  3-DIAGNOSTIC-WIN7.bat      rapport de diagnostic automatique
+  GUIDE-TULIPFACTURES.txt    guide complet (installation + pannes)
+  2-LISEZ-MOI-SUPERETTE.txt  notice detaillee du client SUPERETTE

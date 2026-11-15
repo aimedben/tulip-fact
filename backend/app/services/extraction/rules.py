@@ -27,6 +27,25 @@ TOKEN_RE = re.compile(
 )
 RATE_TOKEN = re.compile(r"(\d{1,2}(?:[.,]\d{1,2})?)\s*%")
 COLISAGE_PATTERN = re.compile(r"(?<![\d.,])(\d{1,6}(?:\s*[.,]\s*\d{1,3})?)\s*[xX]\s*(\d{1,4})(?![\d])")
+AMOUNT_LINE_RE = re.compile(r"[0-9OoIiLlSsBbZz]{1,4}\s*[xX*]\s*[0-9OoIiLlSsBbZz]")
+_OCR_DIGIT_SWAPS = str.maketrans({
+    "b": "5", "B": "5", "i": "1", "I": "1", "l": "1", "L": "1",
+    "o": "0", "O": "0", "s": "5", "S": "5", "z": "2", "Z": "2",
+    "/": "7", "g": "9", "q": "9",
+})
+
+
+def _ocr_number_fix(raw: str) -> str:
+    """Corrige les chiffres que l'OCR confond avec des lettres (« 44b,00 » → « 445,00 »)."""
+    fixed = raw.translate(_OCR_DIGIT_SWAPS)
+    # Colisage décimal dégradé par l'OCR : « 6.091?1 », « 2.996×1 », « 4.043�1 »
+    # → « 6.091x1 ». Restreint au colisage avec décimales pour ne jamais
+    # transformer une date (« 22/09?11 ») en colisage.
+    return re.sub(
+        r"(?<![\d.,])(\d{1,2}[.,]\d{1,3})\s*[?\ufffd×]\s*(\d{1,4})(?!\d)",
+        r"\1x\2",
+        fixed,
+    )
 TOTAL_KEYWORDS = (
     "total",
     "montant",
@@ -76,12 +95,36 @@ STOP_LINE_KEYWORDS = (
 )
 CONTACT_PREFIXES = ("tel", "tél", "fax", "nif", "rc", "email", "mail", "adresse", "devise", "client")
 
+
+def _is_metadata_header_line(text: str) -> bool:
+    """Détecte les lignes d'en-tête de métadonnées (Date facture, Date BC, etc.) qui ne sont pas des lignes d'articles."""
+    lowered = normalize_key(text)
+    # Lignes qui ressemblent à des métadonnées (pas les colonnes de tableau)
+    metadata_patterns = [
+        "date facture", "date bc", "date bl",
+        "n° facture", "n° bc", "n° bl", "numéro facture",
+        "bon commande", "bon livraison",
+        "devise:", "facture n°", "bc:", "bl:", "n° bc:", "n° bl:",
+    ]
+    if any(pattern in lowered for pattern in metadata_patterns):
+        return True
+    # Détecter l'en-tête du tableau (colonnes)
+    # Ex: "Réf. Désignation Lot Colis Qté PU HT TVA Montant HT"
+    table_header_keywords = ["réf", "désignation", "lot", "colis", "qté", "pu", "tva", "montant"]
+    hits = sum(1 for kw in table_header_keywords if kw in lowered)
+    if hits >= 4:  # Au moins 4 colonnes détectées
+        return True
+    return False
+
 INVOICE_NUMBER_PATTERNS = (
     re.compile(
         r"(?:n[°o]\s*(?:de\s*)?facture|facture\s*n[°o]|num[eé]ro\s*(?:de\s*)?facture|facture\s*n)\s*[:#\-]?\s*([A-Z0-9][A-Z0-9._/\-]{1,40})",
         re.IGNORECASE,
     ),
     re.compile(r"^\s*n[°o]\s*[:#\-]?\s*([A-Z0-9][A-Z0-9._/\-]{2,40})\s*$", re.IGNORECASE),
+    # Très collé : « N336 » — l'OCR perd parfois le ° de « N°336 ». Exige une
+    # ligne qui ne contient QUE le N suivi d'un numéro épuré.
+    re.compile(r"^\s*n\.?\s*[:#\-°ºo]?\s*([0-9][0-9._/\-]{1,14})\s*$", re.IGNORECASE),
 )
 BC_PATTERN = re.compile(
     r"(?:n[°o]\s*b\.?\s*c\.?|b\.?\s*c\.?\s*n[°o]?|bon\s+de\s+commande\s*n[°o]?)\s*[:#\-]?\s*([A-Z0-9][A-Z0-9._/\-]{1,40})",
@@ -230,10 +273,13 @@ def _extract_totals(lines: list[OcrLine]) -> tuple[dict[str, Any], list[dict[str
         if not key:
             continue
 
-        if re.search(r"(?:total\s*t\.?\s*t\.?\s*c|montant\s*ttc|net\s*[àa]\s*payer|total\s*pay[ée])", text, re.IGNORECASE):
+        if re.search(r"(?:total\s*t\.?\s*t\.?\s*c|montant\s*ttc|t\.?\s*t\.?\s*c\s*(?:[àa]\s*)?payer|net\s*[àa]\s*payer|total\s*pay[ée]|payer\s*[:#\-])", text, re.IGNORECASE):
             value, raw, confidence = _amount_after_label(
-                text, r"(?:total\s*t\.?\s*t\.?\s*c|montant\s*ttc|net\s*[àa]\s*payer|total\s*pay[ée])"
+                text, r"(?:total\s*t\.?\s*t\.?\s*c|montant\s*ttc|t\.?\s*t\.?\s*c\s*(?:[àa]\s*)?payer|net\s*[àa]\s*payer|total\s*pay[ée]|payer\s*[:#\-])"
             )
+            if value is None:
+                # « TTC A PAYER : 10280.00 » collé : dernier montant décimal.
+                value, raw = _last_amount(text)
             if value is not None and "total_ttc" not in totals:
                 totals["total_ttc"] = value
                 raw_values["total_ttc"] = raw or ""
@@ -369,20 +415,270 @@ def _emphasis_money(text: str) -> list[Decimal]:
     return values
 
 
-def _split_merged_quantity(price: Decimal, total: Decimal) -> tuple[Decimal, Decimal] | None:
-    """« 24 450,00 » sans les espaces devient 24450,00 : on recolle quantité et prix.
-
-    On essaie toutes les coupures du nombre et on garde celle qui vérifie
-    quantité x prix = total imprimé.
-    """
-    digits = str(int(price))
-    if len(digits) < 4 or price != price.to_integral_value():
+def _designation_candidate(text: str) -> str | None:
+    """Libellé de produit isolé sur sa propre ligne (bon de commande « reçu »)."""
+    cleaned = re.sub(r"[.\u2026]{2,}", " ", clean_text(text))
+    cleaned = cleaned.strip(" -:;|[].")
+    cleaned = re.sub(r"^\d{1,3}\s+", "", cleaned)
+    if len(cleaned) < 4 or len(cleaned) > 80:
         return None
-    tolerance = max(Decimal("0.05"), abs(total) * Decimal("0.002"))
-    for index in range(1, len(digits) - 2):
-        quantity = Decimal(digits[:index])
-        unit_price = Decimal(digits[index:]).quantize(Decimal("0.01"))
-        if quantity > 0 and unit_price > 0 and abs(quantity * unit_price - total) <= tolerance:
+    if re.search(r"\d{7,}", cleaned):
+        return None
+    amount_hint = AMOUNT_LINE_RE.search(cleaned)
+    # « Garrido xois chiche » contient « oxo », qui ressemble à un « 0x0 »
+    # sans en être un : on n'écarte la ligne que si l'indice contient un vrai
+    # chiffre (ex. « 10x 445,00 »).
+    if amount_hint and re.search(r"\d", amount_hint.group(0)):
+        return None
+    words = re.findall(r"[A-Za-zÀ-ÿ]{2,}", cleaned)
+    if len(words) < 2 or not any(len(word) >= 4 for word in words):
+        return None
+    # Pointillés OCR ramenés en espaces : on garde les 5 premiers mots, ils portent
+    # le libellé utile et pas les débris (« Garrid 6015 CHIC SOUP 6 ew ee tees »).
+    cleaned = " ".join(cleaned.split()[:5])
+    cleaned = re.sub(r"(?:\s*\d{1,3})+$", "", cleaned).strip(" -:;|[].")
+    if len(re.findall(r"[A-Za-zÀ-ÿ]{2,}", cleaned)) < 2:
+        return None
+    lowered = normalize_key(cleaned)
+    if lowered.startswith(
+        ("commande", "facture", "vendeur", "client", "date", "tel", "telephone", "adresse", "bon", "du ")
+    ):
+        return None
+    return cleaned
+
+
+def _parse_receipt_amount(text: str) -> tuple[Decimal, Decimal, Decimal, bool] | None:
+    """Lit « 10 x 445,00 = 4 450,00 » et corrige les confusions OCR courantes.
+
+    Le dernier booléen indique si le trio quantité × prix = total est cohérent.
+    Les lignes incohérentes sont conservées (avec avertissement) plutôt que
+    perdues : sur une photo de reçu, l'OCR se trompe souvent d'un chiffre.
+    """
+    normalized = _ocr_number_fix(clean_text(text))
+    match = re.search(r"(\d{1,4})\s*[xX*]\s*", normalized)
+    if not match:
+        # Nouveau pattern pour les tickets : « 40 80 46,00 » (colisage quantité prix).
+        # Uniquement pour de VRAIES lignes de montants (sans libellé) : une ligne de
+        # facture classique comme « ART-002 ... 1 12 320,50 19 3 846,00 » ne doit
+        # jamais être interprétée comme une ligne de montants de ticket.
+        amount_pattern = re.compile(
+            r"\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?"
+        )
+        tokens = [m.group(0) for m in amount_pattern.finditer(normalized)]
+        letters = re.sub(r"[\d ,.\u00a0\u202f]+", " ", normalized).strip(" .-")
+        monnaie = re.search(
+            r"(?:\s|^)(?:DZD|DA|DH|TND|EUR|USD|MAD|DT)$", letters, re.IGNORECASE
+        )
+        if letters and not monnaie:
+            return None
+        if len(tokens) >= 3:
+            # Le dernier token DOIT avoir des décimales (c'est le prix)
+            last_token = tokens[-1]
+            if "," not in last_token and "." not in last_token:
+                return None  # Pas de décimales = pas un prix valide
+            # Format: colisage quantité prix
+            packages = parse_decimal(tokens[0])
+            quantity = parse_decimal(tokens[1])
+            unit_price = parse_decimal(tokens[2])
+            if packages and quantity and unit_price and all(
+                v > 0 for v in [packages, quantity, unit_price]
+            ):
+                line_total = (quantity * unit_price).quantize(Decimal("0.01"))
+                return quantity, unit_price, line_total, True
+        return None
+    if not match:
+        # Nouveau pattern pour les tickets: "40 80 46,00" (colisage quantité prix)
+        amount_pattern = re.compile(r"\d{1,3}(?:[   ]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?")
+        tokens = [m.group(0) for m in amount_pattern.finditer(normalized)]
+        if len(tokens) >= 3:
+            # Le dernier token DOIT avoir des décimales (c'est le prix)
+            last_token = tokens[-1]
+            if "," not in last_token and "." not in last_token:
+                return None  # Pas de décimales = pas un prix valide
+            # Format: colisage quantité prix
+            packages = parse_decimal(tokens[0])
+            quantity = parse_decimal(tokens[1])
+            unit_price = parse_decimal(tokens[2])
+            if packages and quantity and unit_price and all(v > 0 for v in [packages, quantity, unit_price]):
+                # Calculer le total à partir de quantité × prix
+                line_total = (quantity * unit_price).quantize(Decimal("0.01"))
+                return quantity, unit_price, line_total, True
+        return None
+    quantity = parse_decimal(match.group(1))
+    if quantity is None or quantity <= 0:
+        return None
+
+    rest_text = re.sub(r"\d{1,2}(?:[.,]\d+)?\s*%", " ", normalized[match.end() :])
+    # Un montant peut contenir des espaces de milliers (« 2 200,00 »). On ne
+    # supprime donc pas tous les espaces : cela collerait le prix et le total
+    # (« 220,00 2200,00 » devenait « 220,002200,00 »).
+    amount_pattern = re.compile(
+        r"\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?"
+    )
+    tokens = [match.group(0) for match in amount_pattern.finditer(rest_text)]
+    if len(tokens) < 2:
+        return None
+    unit_price = parse_decimal(tokens[0])
+    line_total = parse_decimal(tokens[1])
+    if unit_price is None or unit_price <= 0 or line_total is None or line_total <= 0:
+        return None
+
+    def tolerance(total: Decimal) -> Decimal:
+        return max(Decimal("0.05"), abs(total) * Decimal("0.002"))
+
+    # 1. Lecture exacte.
+    if abs(quantity * unit_price - line_total) <= tolerance(line_total):
+        return quantity, unit_price, line_total, True
+
+    # 2. Le total imprimé est fiable : on en déduit le prix unitaire.
+    derived = (line_total / quantity).quantize(Decimal("0.01"))
+    if derived > 0 and abs(derived - unit_price) <= max(Decimal("1"), unit_price * Decimal("0.35")):
+        return quantity, derived, line_total, True
+
+    # 3. Le prix unitaire est fiable : le total a perdu un zéro (« 220 » pour 2 200).
+    computed = (quantity * unit_price).quantize(Decimal("0.01"))
+    ratio = computed / line_total if line_total else Decimal(0)
+    for factor in (Decimal(10), Decimal(100)):
+        if abs(ratio - factor) <= factor * Decimal("0.05"):
+            return quantity, unit_price, computed, True
+
+    # 4. Aucune cohérence : on garde le total imprimé et on déduit le prix
+    #    unitaire, avec un avertissement visible dans l'UI.
+    return quantity, derived if derived > 0 else unit_price, line_total, False
+
+
+def _find_receipt_designation(
+    ordered: list[OcrLine], index: int, used: set[int]
+) -> tuple[str | None, int | None]:
+    # Sur un reçu, le libellé est au-dessus de la ligne de montants. On ne
+    # regarde pas en dessous pour ne pas voler le libellé de l'article suivant.
+    for probe in (index - 1, index - 2, index - 3):
+        if probe < 0 or probe >= len(ordered) or probe in used:
+            continue
+        if ordered[probe].page_number != ordered[index].page_number:
+            continue
+        # Pour les tickets, accepter les lignes sans montant comme désignations
+        text = ordered[probe].text.strip()
+        lowered_probe = normalize_key(text)
+        if any(word in lowered_probe for word in ("designation", "montant", "tva", "pu ht", "prix", "colis", "qte", "quantite", "lot")):
+            continue
+        if _is_metadata_header_line(text):
+            continue
+        # Si la ligne ne contient pas de montant décimal, c'est probablement une désignation
+        if not re.search(r'\d+[.,]\d{2}', text):
+            candidate = _designation_candidate(text)
+            if candidate is not None:
+                return candidate, probe
+            # Même sans candidat valide, si ça ressemble à un produit, on le prend
+            if len(text) > 5 and any(c.isalpha() for c in text):
+                # Nettoyer la désignation
+                cleaned = re.sub(r'\s+', ' ', text).strip()
+                if cleaned:
+                    return cleaned, probe
+        else:
+            candidate = _designation_candidate(text)
+            if candidate is not None:
+                return candidate, probe
+    return None, None
+
+
+def _merge_receipt_pairs(ordered: list[OcrLine]) -> tuple[list[tuple[int, ExtractedLine]], set[int]]:
+    """Apparie « libellé produit » et sa ligne « 10 x 445,00 = 4 450,00 ».
+
+    Les impressions de type reçu coupent chaque article en deux lignes OCR :
+    la désignation, puis les montants. On ne bascule dans ce mode que si le
+    document contient au moins deux lignes de montants réellement cohérentes,
+    afin de ne pas casser l'extraction des factures classiques.
+    """
+    candidates: list[tuple[int, OcrLine, Decimal, Decimal, Decimal, bool]] = []
+    for index, item in enumerate(ordered):
+        text = item.text.strip()
+        # Exclure les lignes de métadonnées (Date facture, N° BC, etc.)
+        if _is_metadata_header_line(text):
+            continue
+        parsed = _parse_receipt_amount(item.text)
+        if parsed is None:
+            continue
+        quantity, unit_price, line_total, coherent = parsed
+        candidates.append((index, item, quantity, unit_price, line_total, coherent))
+
+    if sum(1 for candidate in candidates if candidate[5]) < 2:
+        return [], set()
+
+    consumed: set[int] = set()
+    results: list[tuple[int, ExtractedLine]] = []
+    for index, item, quantity, unit_price, line_total, coherent in candidates:
+        if index in consumed:
+            continue
+        designation, probe = _find_receipt_designation(ordered, index, consumed)
+        warnings: list[dict[str, Any]] = []
+        if designation is None:
+            designation = f"Article {index + 1}"
+            warnings.append(
+                {
+                    "code": "DESIGNATION_MANQUANTE",
+                    "severity": "warning",
+                    "message": "Le libellé de cet article n'a pas pu être lu ; complétez la désignation.",
+                }
+            )
+        else:
+            consumed.add(probe)  # type: ignore[arg-type]
+        if not coherent:
+            warnings.append(
+                {
+                    "code": "LIGNE_CALCUL_INCOHERENT",
+                    "severity": "warning",
+                    "message": "Quantité × prix unitaire ne correspond pas exactement au montant imprimé ; vérifiez cette ligne.",
+                }
+            )
+        consumed.add(index)
+        results.append(
+            (
+                index,
+                ExtractedLine(
+                    raw_reference=None,
+                    designation=designation,
+                    quantity=quantity,
+                    unit_price_ht=unit_price,
+                    line_total_ht=line_total,
+                    confidence={
+                        "global": 0.75 if coherent else 0.55,
+                        "reference": 0.0,
+                        "designation": 0.7 if designation and not designation.startswith("Article ") else 0.3,
+                        "quantity": 0.8 if coherent else 0.4,
+                        "unit_price": 0.8 if coherent else 0.4,
+                        "total": 0.8 if coherent else 0.5,
+                        "lot": 0.0,
+                        "packages": 0.0,
+                        "coherent": coherent,
+                    },
+                    source_page=item.page_number,
+                    source_bbox=item.bbox,
+                    original_text=f"{designation} | {clean_text(item.text)}",
+                    warnings=warnings,
+                ),
+            )
+        )
+    results.sort(key=lambda pair: pair[0])
+    return results, consumed
+
+
+def _split_merged_quantity(price: Decimal, total: Decimal) -> tuple[Decimal, Decimal] | None:
+    """« 24 450,00 » recollé en 24450,00 : on retrouve quantité et prix.
+
+    On essaie les coupures possibles du nombre (en centimes) et on garde celle qui
+    vérifie quantité x prix = total imprimé.
+    """
+    cents = str(int((price * 100).to_integral_value()))
+    if len(cents) < 5:
+        return None
+    tolerance = max(Decimal("0.05"), abs(total) * Decimal("0.0002"))
+    for index in range(1, min(5, len(cents) - 2)):
+        quantity = Decimal(cents[:index])
+        unit_price = (Decimal(cents[index:]) / Decimal(100)).quantize(Decimal("0.01"))
+        if quantity <= 0 or unit_price <= 0:
+            continue
+        if abs(quantity * unit_price - total) <= tolerance:
             return quantity, unit_price
     return None
 
@@ -512,6 +808,8 @@ def _parse_item_line(line: OcrLine) -> ExtractedLine | None:
     if any(keyword in lowered for keyword in LINE_HEADER_KEYWORDS):
         return None
     if any(lowered.startswith(prefix) for prefix in CONTACT_PREFIXES):
+        return None
+    if _is_metadata_header_line(text):
         return None
 
     raw_reference, rest = _parse_reference_and_rest(text)
@@ -654,8 +952,19 @@ def _merge_continuation(previous: ExtractedLine | None, line: OcrLine) -> bool:
     text = clean_text(line.text).strip()
     if not text or len(text) < 3 or len(text) > 120:
         return False
+    # Séparateurs de cadres/pointillés de l'OCR (« ---- », « :-- ») : c'est de la
+    # décoration de bord de colonne, pas un article ; ne jamais l'ajouter au libellé.
+    if re.search(r"[-=+]{2,}", text) or re.search(r"[|]{2,}", text) or re.search(r"[.\u2026]{4,}", text):
+        return False
+    words = [word for word in text.split() if word]
+    if len(words) > 5 or len(text) > 45:
+        return False
+    if words and sum(1 for word in words if not re.fullmatch(r"[\W\d_]+", word)) < max(1, len(words) // 2):
+        return False
     lowered = normalize_key(text)
     if any(keyword in lowered for keyword in TOTAL_KEYWORDS):
+        return False
+    if any(keyword in lowered for keyword in ("document", "fictif", "merci", "confiance", "aucune valeur")):
         return False
     if re.search(r"\d[.,]\d{2}", text):
         return False
@@ -736,6 +1045,12 @@ def parse_invoice(lines: list[OcrLine]) -> ExtractedInvoice:
             match = pattern.search(text)
             if match:
                 candidate = parse_date(match.group(1))
+                if candidate is None:
+                    # Date collée au texte (« Date:22/09/202611:49:42 ») :
+                    # saisir la sous-chaîne jj/mm/aaaa directement.
+                    raw_date = re.search(r"\d{1,2}[./]\d{1,2}[./]\d{4}", match.group(1))
+                    if raw_date:
+                        candidate = parse_date(raw_date.group(0))
                 if candidate:
                     invoice_date = candidate
                     header_raw["invoice_date"] = _confidence(
@@ -810,28 +1125,54 @@ def parse_invoice(lines: list[OcrLine]) -> ExtractedInvoice:
 
     extracted_lines: list[ExtractedLine] = []
     from .tables import parse_table_rows  # import local : tables.py dépend de ce module
+    from .ticket_parser import parse_ticket_multiline  # Parser pour tickets multi-lignes
 
-    table_lines = parse_table_rows(ordered)
-    if table_lines:
-        extracted_lines = table_lines
-        warnings_meta: dict[str, Any] = {"table_parsing": True}
+    # Essayer d'abord le parser de tickets multi-lignes
+    ticket_lines = parse_ticket_multiline(ordered)
+    if ticket_lines is not None:
+        extracted_lines = ticket_lines
+        warnings_meta: dict[str, Any] = {"ticket_multiline_parsing": True}
     else:
-        warnings_meta = {}
+        # Fallback sur le parsing de tableaux standard
+        table_lines = parse_table_rows(ordered)
+        receipt_lines: dict[int, ExtractedLine] = {}
+        consumed: set[int] = set()
+        if table_lines:
+            extracted_lines = table_lines
+            warnings_meta = {"table_parsing": True}
+        else:
+            warnings_meta = {}
+            paired, consumed = _merge_receipt_pairs(ordered)
+            receipt_lines = {index: line for index, line in paired}
+            extracted_lines = [line for _, line in paired]
+
+    # Gérer la boucle de continuation seulement si on n'a pas utilisé le parser de tickets
     previous: ExtractedLine | None = None
-    for item in ([] if table_lines else ordered):
-        text = item.text.strip()
-        lowered_line = normalize_key(text)
-        if not text:
-            continue
-        if any(keyword in lowered_line for keyword in STOP_LINE_KEYWORDS):
-            continue
-        parsed = _parse_item_line(item)
-        if parsed is not None:
-            extracted_lines.append(parsed)
-            previous = parsed
-            continue
-        if previous is not None and _merge_continuation(previous, item):
-            continue
+    if ticket_lines is None and not table_lines:
+        # Code de fallback pour les formats standard (seulement si pas de table et pas de ticket)
+        for item_index, item in enumerate(ordered):
+            if item_index in consumed:
+                continue
+            receipt_line = receipt_lines.get(item_index)
+            if receipt_line is not None:
+                extracted_lines.append(receipt_line)
+                previous = None
+                continue
+            text = item.text.strip()
+            lowered_line = normalize_key(text)
+            if not text:
+                continue
+            if any(keyword in lowered_line for keyword in STOP_LINE_KEYWORDS):
+                continue
+            if _is_metadata_header_line(text):
+                continue
+            parsed = _parse_item_line(item)
+            if parsed is not None:
+                extracted_lines.append(parsed)
+                previous = parsed
+                continue
+            if previous is not None and _merge_continuation(previous, item):
+                continue
 
     if extracted_lines:
         _rescale_impossible_lines(extracted_lines, totals)
@@ -845,13 +1186,25 @@ def parse_invoice(lines: list[OcrLine]) -> ExtractedInvoice:
             }
         )
     if invoice_number is None:
-        warnings.append(
-            {
-                "code": "NUMERO_FACTURE_ABSENT",
-                "severity": "warning",
-                "message": "Le numéro de facture n'a pas été détecté.",
-            }
-        )
+        # Fallback: utiliser le BL comme numéro de facture s'il existe
+        if bl_number is not None:
+            invoice_number = bl_number
+            header_raw["invoice_number"] = _confidence(0.65, "BL utilisé comme numéro facture")
+            warnings.append(
+                {
+                    "code": "NUMERO_FACTURE_DEPUIS_BL",
+                    "severity": "info",
+                    "message": f"Numéro de facture absent, utilisation du BL (N°{bl_number}) comme numéro.",
+                }
+            )
+        else:
+            warnings.append(
+                {
+                    "code": "NUMERO_FACTURE_ABSENT",
+                    "severity": "warning",
+                    "message": "Le numéro de facture n'a pas été détecté.",
+                }
+            )
     if invoice_date is None:
         warnings.append(
             {

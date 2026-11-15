@@ -72,15 +72,15 @@ export function Dashboard() {
   return (
     <>
       <PageHeader
-        title="Tableau de bord"
-        subtitle="Suivez les factures fournisseurs, du scan jusqu'au fichier d'entrée préparé pour Tulip."
+        title="Accueil"
+        subtitle="Vos factures fournisseurs, du scan jusqu'à l'enregistrement dans Tulip."
         actions={
           <>
             <Link to="/history" className="button">
               <Icon name="history" size={16} /> Historique
             </Link>
             <Link to="/import" className="button button-primary">
-              <Icon name="upload" size={16} /> Importer des factures
+              <Icon name="upload" size={16} /> Ajouter une facture
             </Link>
           </>
         }
@@ -117,7 +117,7 @@ export function Dashboard() {
             </span>
           </div>
           <div className="kpi-value">{counts.en_cours}</div>
-          <div className="kpi-foot">OCR et extraction en cours</div>
+          <div className="kpi-foot">Lecture des factures en cours</div>
         </Link>
         <Link to="/history?status=VALIDEE" className="kpi-card">
           <div className="kpi-top">
@@ -131,13 +131,13 @@ export function Dashboard() {
         </Link>
         <Link to="/history?status=EXPORTEE" className="kpi-card">
           <div className="kpi-top">
-            <span className="kpi-label">Exportées</span>
+            <span className="kpi-label">Terminées</span>
             <span className="kpi-icon">
               <Icon name="download" size={18} />
             </span>
           </div>
           <div className="kpi-value">{counts.exportees}</div>
-          <div className="kpi-foot">Fichiers générés localement</div>
+          <div className="kpi-foot">Validées et enregistrées dans Tulip</div>
         </Link>
       </div>
 
@@ -158,10 +158,10 @@ export function Dashboard() {
           {data.recent_invoices.length === 0 ? (
             <EmptyState
               title="Aucune facture importée"
-              description="Ajoutez un PDF ou une photo de facture pour démarrer. L'OCR local extrait ensuite les champs."
+              description="Ajoutez un PDF ou une photo de facture pour démarrer. Les champs sont lus automatiquement."
               action={
                 <Link to="/import" className="button button-primary">
-                  <Icon name="upload" size={16} /> Importer une première facture
+                  <Icon name="upload" size={16} /> Ajouter une première facture
                 </Link>
               }
             />
@@ -248,27 +248,27 @@ export function Dashboard() {
             </div>
           </Panel>
 
-          <Panel title="Chaîne de traitement">
+          <Panel title="Comment ça marche">
             <ol className="flow-list">
               <li>
                 <span className="flow-step">1</span>
                 <div>
-                  <strong>Importer</strong>
-                  <small>PDF, JPG ou PNG. OCR local, sans envoi obligatoire.</small>
+                  <strong>Ajouter</strong>
+                  <small>PDF, JPG ou PNG. Tout reste sur cet ordinateur.</small>
                 </div>
               </li>
               <li>
                 <span className="flow-step">2</span>
                 <div>
                   <strong>Vérifier</strong>
-                  <small>Corriger les champs, rapprocher fournisseur et articles.</small>
+                  <small>Corriger les champs, choisir le fournisseur et les articles.</small>
                 </div>
               </li>
               <li>
                 <span className="flow-step">3</span>
                 <div>
-                  <strong>Valider puis exporter</strong>
-                  <small>Le fichier préparatoire reste à contrôler avant import Tulip.</small>
+                  <strong>Valider</strong>
+                  <small>La facture est enregistrée directement dans Tulip.</small>
                 </div>
               </li>
             </ol>
@@ -277,8 +277,8 @@ export function Dashboard() {
       </div>
 
       <Panel
-        title="Derniers exports"
-        subtitle="Fichiers générés localement. Le format d'import Tulip n'est pas confirmé."
+        title="Derniers enregistrements"
+        subtitle="Factures envoyées dans Tulip."
         actions={
           <Link to="/history" className="text-link">
             Consulter <Icon name="chevronRight" size={15} />
@@ -287,7 +287,7 @@ export function Dashboard() {
         flush
       >
         {data.recent_exports.length === 0 ? (
-          <p className="muted small panel-padded">Aucun export pour le moment.</p>
+          <p className="muted small panel-padded">Aucun enregistrement pour le moment.</p>
         ) : (
           <div className="table-wrap">
             <table className="data-table compact-table">

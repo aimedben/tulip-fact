@@ -56,6 +56,14 @@ def test_product_xlsx_import_and_missing_columns(client):
     assert listing["total"] == 1
     assert listing["items"][0]["packaging"] == "1 carton = 6"
 
+    # Neutraliser le produit d'essai : son code-barres (6130000000999) est aussi
+    # celui utilisé par tests/test_matching.py. Sans désactivation, deux produits
+    # « code-barres exact » à 0,99 rendent le meilleur candidat dépendant de
+    # l'ordre d'exécution des tests.
+    for item in listing["items"]:
+        response = client.patch(f"/api/products/{item['id']}", json={"active": False})
+        assert response.status_code == 200, response.text
+
     invalid = client.post(
         "/api/suppliers/import",
         files={"file": ("mauvais.csv", b"code;tel\n1;000\n", "text/csv")},

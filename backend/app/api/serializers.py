@@ -30,6 +30,9 @@ def supplier_payload(supplier: Supplier) -> dict[str, Any]:
         "phone": supplier.phone,
         "email": supplier.email,
         "address": supplier.address,
+        "city": supplier.city,
+        "mf": supplier.mf,
+        "nis": supplier.nis,
         "notes": supplier.notes,
         "active": supplier.active,
     }
@@ -39,6 +42,7 @@ def product_payload(product: Product) -> dict[str, Any]:
     return {
         "id": product.id,
         "tulip_code": product.tulip_code,
+        "reference": product.reference,
         "supplier_ref": product.supplier_ref,
         "barcode": product.barcode,
         "designation": product.designation,
@@ -82,6 +86,7 @@ def line_payload(line: InvoiceLine) -> dict[str, Any]:
         "unit": line.unit,
         "packaging": line.packaging,
         "unit_price_ht": num(line.unit_price_ht),
+        "prix_vente": num(line.prix_vente),
         "vat_rate": num(line.vat_rate),
         "line_total_ht_extracted": num(line.line_total_ht_extracted),
         "line_total_ht_calculated": num(line.line_total_ht_calculated),

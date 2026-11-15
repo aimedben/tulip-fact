@@ -1,4 +1,4 @@
-# Script d'installation automatique de Tulip Factures
+﻿# Script d'installation automatique de Tulip Factures
 # Usage : .\install.ps1 [-Portable] [-InstallPath "C:\chemin\installation"]
 
 param(
@@ -79,9 +79,16 @@ Write-Host "Activation de l'environnement virtuel..." -ForegroundColor Yellow
 
 # Installer les dépendances Python
 Write-Host ""
-Write-Host "Installation des dépendances Python..." -ForegroundColor Yellow
-& python -m pip install --upgrade pip --quiet
-& pip install -r backend\requirements.txt --quiet
+Write-Host "Installation des dépendances Python (peut prendre plusieurs minutes)..." -ForegroundColor Yellow
+& python -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { Write-Host "Avertissement : mise à jour de pip échouée, poursuite..." -ForegroundColor Yellow }
+& pip install -r backend\requirements.txt
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "✗ Échec de l'installation des dépendances Python." -ForegroundColor Red
+    Write-Host "  Vérifiez votre connexion Internet et la version de Python (3.12+ recommandé)." -ForegroundColor Yellow
+    Write-Host "  Détail ci-dessus. Relancez INSTALLER.bat après correction." -ForegroundColor Yellow
+    exit 1
+}
 Write-Host "✓ Dépendances Python installées" -ForegroundColor Green
 
 # Créer le fichier .env s'il n'existe pas
@@ -101,8 +108,15 @@ Write-Host "Création des raccourcis..." -ForegroundColor Yellow
 # Script de démarrage
 $startScript = @"
 `$env:TULIP_APP_MODE = "production"
+& "$InstallPath\autoriser-telephone.ps1"
+`$lanIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { `$_.IPAddress -notlike "127.*" -and `$_.IPAddress -notlike "169.254.*" -and `$_.PrefixOrigin -ne "WellKnown" } |
+    Select-Object -First 1 -ExpandProperty IPAddress
+Write-Host "PC : http://127.0.0.1:8000"
+if (`$lanIp) { Write-Host "Telephone (meme Wi-Fi) : http://`${lanIp}:8000" }
+Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile","-Command","Start-Sleep -Seconds 5; Start-Process 'http://127.0.0.1:8000'"
 Set-Location "$InstallPath\backend"
-& "$InstallPath\.venv\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+& "$InstallPath\.venv\Scripts\python.exe" -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 "@
 $startScript | Out-File -FilePath "$InstallPath\demarrer.ps1" -Encoding UTF8
 
@@ -111,7 +125,7 @@ $demoScript = @"
 `$env:TULIP_APP_MODE = "demo"
 Set-Location "$InstallPath\backend"
 & "$InstallPath\.venv\Scripts\python.exe" -m app.demo
-& "$InstallPath\.venv\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+& "$InstallPath\.venv\Scripts\python.exe" -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 "@
 $demoScript | Out-File -FilePath "$InstallPath\demarrer-demo.ps1" -Encoding UTF8
 
@@ -139,6 +153,16 @@ foreach ($dir in $dataDirs) {
 }
 Write-Host "✓ Structure de données créée" -ForegroundColor Green
 
+# Autoriser l'accès depuis le téléphone sur le réseau local
+try {
+    & "$InstallPath\autoriser-telephone.ps1"
+    Write-Host "✓ Accès téléphone autorisé (pare-feu Windows, port 8000)" -ForegroundColor Green
+} catch {
+    Write-Host "⚠ Impossible d'ajouter la règle pare-feu automatiquement." -ForegroundColor Yellow
+    Write-Host "  Lancez PowerShell en administrateur puis :" -ForegroundColor Yellow
+    Write-Host "  New-NetFirewallRule -DisplayName 'Tulip Factures (LAN)' -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Any -RemoteAddress LocalSubnet" -ForegroundColor White
+}
+
 # Instructions finales
 Write-Host ""
 Write-Host "=======================================" -ForegroundColor Cyan
@@ -154,6 +178,12 @@ Write-Host "Mode DEMO (données isolées) :" -ForegroundColor Yellow
 Write-Host "  Exécutez : .\demarrer-demo.ps1" -ForegroundColor White
 Write-Host ""
 Write-Host "L'application sera accessible sur : http://127.0.0.1:8000" -ForegroundColor Green
+$lanIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" -and $_.PrefixOrigin -ne "WellKnown" } |
+    Select-Object -First 1 -ExpandProperty IPAddress
+if ($lanIp) {
+    Write-Host "Depuis votre téléphone (même Wi-Fi) : http://${lanIp}:8000" -ForegroundColor Green
+}
 Write-Host ""
 Write-Host "Documentation : README.md" -ForegroundColor Yellow
 Write-Host "Configuration : .env (à personnaliser selon votre environnement)" -ForegroundColor Yellow

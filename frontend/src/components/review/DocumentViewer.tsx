@@ -18,6 +18,8 @@ export function DocumentViewer({
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [showBoxes, setShowBoxes] = useState(true);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
 
   useEffect(() => {
     setPageNumber(pages[0]?.page_number ?? 1);
@@ -108,6 +110,50 @@ export function DocumentViewer({
               >
                 <Icon name="rotate" />
               </button>
+              <div className="viewer-pan-controls">
+                <button
+                  type="button"
+                  className="icon-button small"
+                  onClick={() => setPanY((v) => v + 20)}
+                  title="Haut"
+                >
+                  <Icon name="chevronLeft" size={14} style={{ transform: 'rotate(90deg)' } as any} />
+                </button>
+                <div style={{ display: "flex", gap: "4px" }}>
+                  <button
+                    type="button"
+                    className="icon-button small"
+                    onClick={() => setPanX((v) => v - 20)}
+                    title="Gauche"
+                  >
+                    <Icon name="chevronLeft" size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button small"
+                    onClick={() => { setPanX(0); setPanY(0); }}
+                    title="Réinitialiser"
+                  >
+                    <Icon name="rotate" size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button small"
+                    onClick={() => setPanX((v) => v + 20)}
+                    title="Droite"
+                  >
+                    <Icon name="chevronRight" size={14} />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="icon-button small"
+                  onClick={() => setPanY((v) => v - 20)}
+                  title="Bas"
+                >
+                  <Icon name="chevronLeft" size={14} style={{ transform: 'rotate(-90deg)' } as any} />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -116,7 +162,8 @@ export function DocumentViewer({
               className="page-stage"
               style={{
                 width: `${zoom * 100}%`,
-                transform: `rotate(${rotation}deg)`,
+                transform: `translate(${panX}px, ${panY}px) rotate(${rotation}deg)`,
+                transformOrigin: 'center',
               }}
             >
               <img src={page.image_url} alt={`Page ${page.page_number} de ${detail.original_filename}`} draggable={false} />

@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { api, ApiError } from "../../lib/api";
 import { parseAmount } from "../../lib/format";
-import type { InvoiceDetail } from "../../types";
+import { fieldClass, numberFieldState, textFieldState } from "../../lib/validation";
+import type { InvoiceDetail, Supplier, SupplierCandidate } from "../../types";
 import { useToast } from "../Toast";
 import { Icon } from "../Icon";
 import { ConfidenceDot } from "../Common";
+import { SupplierInputWithSuggestions } from "../SupplierInputWithSuggestions";
 
 interface Draft {
   invoice_number: string;
@@ -78,7 +80,7 @@ export function HeaderEditor({
   useEffect(() => {
     setDraft(draftFrom(detail));
     setError(null);
-  }, [detail.id, detail.processed_at]);
+  }, [detail.id, detail.processed_at, detail.supplier?.id]);
 
   const original = draftFrom(detail);
   const dirty =
@@ -173,15 +175,31 @@ export function HeaderEditor({
 
   return (
     <div className="form-stack">
+      {(detail.readiness?.hard?.length || detail.checks?.some((c) => c.severity === "error")) ? (
+        <div className="banner banner-danger">
+          <Icon name="alert" size={16} />
+          <div>
+            <strong>Informations obligatoires manquantes</strong>
+            <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
+              {detail.readiness?.hard?.map((item, idx) => (
+                <li key={idx} className="small">{item.message}</li>
+              ))}
+              {detail.checks?.filter((c) => c.severity === "error" && !detail.readiness?.hard?.some((h) => h.message === c.message)).map((item, idx) => (
+                <li key={`c-${idx}`} className="small">{item.message}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
       <div className="form-section">
         <div className="section-title">
           <span>Identification</span>
           <span className="muted small">Champs du bon d'entrée</span>
         </div>
         <div className="form-grid">
-          <label className="field">
+          <label className={`field ${fieldClass(textFieldState(draft.invoice_number, readOnly, true))}`}>
             <span>
-              N° facture <ConfidenceDot value={confidence("invoice_number")} />
+              N° facture (obligatoire) <ConfidenceDot value={confidence("invoice_number")} />
             </span>
             <input
               value={draft.invoice_number}
@@ -250,13 +268,37 @@ export function HeaderEditor({
           </label>
           <label className="field">
             <span>
-              Fournisseur sur le document <ConfidenceDot value={confidence("supplier_name_raw")} />
+              Fournisseur (tapez pour rechercher ou créer) <ConfidenceDot value={confidence("supplier_name_raw")} />
+              {detail.supplier ? (
+                <span className="status-badge tone-success" style={{ marginLeft: "0.5rem" }}>
+                  <Icon name="check-circle" size={13} /> Confirmé
+                </span>
+              ) : (
+                <span className="status-badge tone-danger" style={{ marginLeft: "0.5rem" }}>
+                  <Icon name="alert-triangle" size={13} /> Requis pour validation
+                </span>
+              )}
             </span>
-            <input
+            <SupplierInputWithSuggestions
               value={draft.supplier_name_raw}
-              onChange={(event) => set("supplier_name_raw", event.target.value)}
+              onChange={(value) => set("supplier_name_raw", value)}
+              onSupplierConfirmed={(_supplierId, _supplierName, updated) => {
+                // La confirmation relance le rapprochement côté serveur et
+                // renvoie la facture recalculée : on remplace l'état courant.
+                if (updated) onUpdated(updated);
+              }}
               disabled={readOnly}
+              invoiceId={detail.id}
             />
+            {detail.supplier ? (
+              <span className="muted small">
+                Code Tulip : <span className="mono">{detail.supplier_code}</span>
+                {detail.supplier.tax_id ? ` • NIF : ${detail.supplier.tax_id}` : ""}
+                {detail.supplier_name_raw &&
+                 detail.supplier_name_raw !== detail.supplier.name &&
+                 ` • Sur le document : ${detail.supplier_name_raw}`}
+              </span>
+            ) : null}
           </label>
         </div>
       </div>
@@ -277,7 +319,7 @@ export function HeaderEditor({
               ["total_ttc", "Total TTC"],
             ] as [TotalKey, string][]
           ).map(([key, label]) => (
-            <label className="field" key={key}>
+            <label className={`field ${fieldClass(numberFieldState(draft[key], readOnly))}`} key={key}>
               <span>
                 {label} <ConfidenceDot value={confidence(key)} />
               </span>
@@ -291,6 +333,10 @@ export function HeaderEditor({
               />
             </label>
           ))}
+        </div>
+        <div className="field-legend">
+          <span className="legend-item"><span className="legend-swatch danger" /> valeur obligatoire manquante ou montant invalide</span>
+          <span className="legend-item"><span className="legend-swatch success" /> valeur valide</span>
         </div>
         {detail.totals_extracted.vat_breakdown && Object.keys(detail.totals_extracted.vat_breakdown).length > 0 && (
           <div className="vat-breakdown">

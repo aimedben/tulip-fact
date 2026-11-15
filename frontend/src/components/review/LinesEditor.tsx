@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../lib/api";
 import { formatMoney, matchLabel, parseAmount } from "../../lib/format";
+import { fieldClass, numberFieldState, textFieldState } from "../../lib/validation";
 import type { InvoiceDetail, InvoiceLine, ProductCandidate } from "../../types";
+import { BarcodeScanInput } from "../BarcodeScanInput";
 import { Icon } from "../Icon";
 import { Modal } from "../Modal";
 import { ConfidenceDot } from "../Common";
 import { useToast } from "../Toast";
+import { SupplierDropdown } from "../SupplierDropdown";
+import { ProductAutocomplete } from "../ProductAutocomplete";
 
 function decimalInput(value: number | null | undefined): string {
   if (value === null || value === undefined) return "";
@@ -22,10 +26,11 @@ interface LineDraft {
   vat_rate: string;
   line_total_ht_extracted: string;
   discount_value: string;
+  prix_vente: string;
 }
 
 const TEXT_FIELDS = ["raw_reference", "raw_designation", "lot_number"] as const;
-const NUMBER_FIELDS = ["packages", "quantity", "unit_price_ht", "vat_rate", "line_total_ht_extracted", "discount_value"] as const;
+const NUMBER_FIELDS = ["packages", "quantity", "unit_price_ht", "vat_rate", "line_total_ht_extracted", "discount_value", "prix_vente"] as const;
 
 function draftFrom(line: InvoiceLine): LineDraft {
   return {
@@ -38,6 +43,7 @@ function draftFrom(line: InvoiceLine): LineDraft {
     vat_rate: decimalInput(line.vat_rate),
     line_total_ht_extracted: decimalInput(line.line_total_ht_extracted),
     discount_value: decimalInput(line.discount_value),
+    prix_vente: decimalInput(line.prix_vente),
   };
 }
 
@@ -55,6 +61,7 @@ function LineRow({
   readOnly,
   selected,
   saving,
+  supplierId,
   suggestions,
   suggestionsLoading,
   onSelect,
@@ -69,6 +76,7 @@ function LineRow({
   readOnly: boolean;
   selected: boolean;
   saving: boolean;
+  supplierId: number | null;
   suggestions: ProductCandidate[];
   suggestionsLoading: boolean;
   onSelect: () => void;
@@ -94,15 +102,20 @@ function LineRow({
 
   const set = (key: keyof LineDraft, value: string) => setDraft((current) => ({ ...current, [key]: value }));
 
+  // Validation visuelle : bordure rouge sur obligatoire manquant / valeur
+  // invalide, bordure verte sur valeur valide.
+  const designationState = textFieldState(draft.raw_designation, readOnly, true);
+  const cellState = (key: keyof LineDraft) => fieldClass(numberFieldState(draft[key], readOnly));
+
   const submit = async () => {
     setError(null);
     if (!draft.raw_designation.trim()) {
-      setError("La dÃ©signation est obligatoire.");
+      setError("La désignation est obligatoire.");
       return;
     }
     for (const key of NUMBER_FIELDS) {
       if (draft[key].trim() !== "" && parseAmount(draft[key]) === null) {
-        setError("Valeur numÃ©rique invalide.");
+        setError("Valeur numérique invalide.");
         return;
       }
     }
@@ -117,7 +130,7 @@ function LineRow({
     }
     if (Object.keys(payload).length === 0) return;
     const ok = await onSave(payload);
-    if (!ok) setError("La modification n'a pas pu Ãªtre enregistrÃ©e.");
+    if (!ok) setError("La modification n'a pas pu être enregistrée.");
   };
 
   const calculatedTone =
@@ -141,18 +154,38 @@ function LineRow({
           value={draft.raw_reference}
           onChange={(event) => set("raw_reference", event.target.value)}
           disabled={readOnly}
-          aria-label={`RÃ©fÃ©rence ligne ${line.position}`}
+          aria-label={`Référence ligne ${line.position}`}
         />
       </td>
       <td className="designation-cell">
-        <input
-          className="cell-input"
-          value={draft.raw_designation}
-          onChange={(event) => set("raw_designation", event.target.value)}
-          disabled={readOnly}
-          aria-label={`DÃ©signation ligne ${line.position}`}
-        />
-        {error && <span className="cell-error">{error}</span>}
+        {readOnly ? (
+          <input
+            className="cell-input"
+            value={draft.raw_designation}
+            onChange={(event) => set("raw_designation", event.target.value)}
+            disabled
+            aria-label={`Désignation ligne ${line.position}`}
+          />
+        ) : (
+          <ProductAutocomplete
+            value={draft.raw_designation}
+            onChange={(value) => set("raw_designation", value)}
+            onPick={(candidate) => set("raw_designation", candidate.designation)}
+            onAssociate={(candidate) => {
+              set("raw_designation", candidate.designation);
+              onPickProduct(candidate.product_id);
+            }}
+            supplierId={supplierId}
+            reference={draft.raw_reference}
+            className={`cell-input ${fieldClass(designationState)}`}
+            ariaLabel={`Désignation ligne ${line.position}`}
+          />
+        )}
+        {error ? (
+          <span className="cell-error">{error}</span>
+        ) : (
+          designationState === "error" && <span className="cell-error">Désignation obligatoire</span>
+        )}
       </td>
       <td>
         <input
@@ -180,7 +213,7 @@ function LineRow({
           value={draft.quantity}
           onChange={(event) => set("quantity", event.target.value)}
           disabled={readOnly}
-          aria-label={`QuantitÃ© ligne ${line.position}`}
+          aria-label={`Quantité ligne ${line.position}`}
         />
       </td>
       <td>
@@ -191,6 +224,17 @@ function LineRow({
           onChange={(event) => set("unit_price_ht", event.target.value)}
           disabled={readOnly}
           aria-label={`Prix unitaire ligne ${line.position}`}
+        />
+      </td>
+      <td>
+        <input
+          className="cell-input mono narrow"
+          inputMode="decimal"
+          value={draft.prix_vente}
+          onChange={(event) => set("prix_vente", event.target.value)}
+          disabled={readOnly}
+          placeholder="0"
+          aria-label={`Prix de vente ligne ${line.position}`}
         />
       </td>
       <td>
@@ -225,7 +269,7 @@ function LineRow({
         />
         {calculatedTone && (
           <div className="cell-hint warning-text">
-            calculÃ© {formatMoney(line.line_total_ht_calculated, currency)}
+            calculé {formatMoney(line.line_total_ht_calculated, currency)}
           </div>
         )}
       </td>
@@ -267,21 +311,23 @@ function LineRow({
                 >
                   <option value="">
                     {suggestionsLoading
-                      ? "Recherche d'articlesâ€¦"
+                      ? "Recherche d'articles…"
                       : suggestions.length > 0
-                        ? "â€” choisir l'article Tulip â€”"
-                        : "â€” aucun article proposÃ© â€”"}
+                        ? "— choisir l'article Tulip —"
+                        : "— aucun article proposé —"}
                   </option>
                   {suggestions.map((candidate) => (
                     <option key={candidate.product_id} value={candidate.product_id}>
-                      {candidate.tulip_code} Â· {candidate.designation}
+                      {candidate.tulip_code} · {candidate.designation}
+                      {candidate.reference ? ` · réf. art. ${candidate.reference}` : ""}
+                      {candidate.barcode ? ` · ${candidate.barcode}` : ""}
                       {candidate.score ? ` (${Math.round(candidate.score * 100)} %)` : ""}
                     </option>
                   ))}
-                  <option value="__new__">âž• Nouveau produit (absent du rÃ©fÃ©rentiel)</option>
+                  <option value="__new__">➕ Nouveau produit (absent du référentiel)</option>
                 </select>
                 <button type="button" className="mini-link strong" onClick={onMatch}>
-                  Recherche avancÃ©e
+                  Recherche avancée
                 </button>
               </>
             )}
@@ -371,7 +417,7 @@ export function LinesEditor({
             return;
           }
           try {
-            const result = await api.suggestProducts(line.raw_designation, detail.supplier_id);
+            const result = await api.suggestProducts(line.raw_designation, detail.supplier_id, line.raw_reference);
             entries[line.id] = result.items.slice(0, 8);
           } catch {
             entries[line.id] = [];
@@ -395,7 +441,7 @@ export function LinesEditor({
       if (successMessage) show(successMessage, "success");
       return true;
     } catch (error) {
-      const message = error instanceof ApiError || error instanceof Error ? error.message : "OpÃ©ration impossible.";
+      const message = error instanceof ApiError || error instanceof Error ? error.message : "Opération impossible.";
       show(message, "error");
       return false;
     }
@@ -411,29 +457,29 @@ export function LinesEditor({
   const removeLine = async () => {
     if (!deleteTarget) return;
     const target = deleteTarget;
-    const ok = await run(() => api.deleteLine(detail.id, target.id), "Ligne supprimÃ©e.");
+    const ok = await run(() => api.deleteLine(detail.id, target.id), "Ligne supprimée.");
     if (ok) setDeleteTarget(null);
   };
 
   const confirmProduct = async (productId: number) => {
     if (!productTarget) return;
     const target = productTarget;
-    const ok = await run(() => api.matchLine(detail.id, target.id, productId), "Article rapprochÃ©.");
+    const ok = await run(() => api.matchLine(detail.id, target.id, productId), "Article rapproché.");
     if (ok) setProductTarget(null);
   };
 
   const pickProduct = async (line: InvoiceLine, productId: number) => {
-    await run(() => api.matchLine(detail.id, line.id, productId), "Article rapprochÃ©.");
+    await run(() => api.matchLine(detail.id, line.id, productId), "Article rapproché.");
   };
 
   const createProduct = async (line: InvoiceLine, payload: Record<string, unknown>) => {
-    const ok = await run(() => api.createLineProduct(detail.id, line.id, payload), "Nouvel article crÃ©Ã© et rattachÃ©.");
+    const ok = await run(() => api.createLineProduct(detail.id, line.id, payload), "Nouvel article créé et rattaché.");
     if (ok) setNewProductTarget(null);
     return ok;
   };
 
   const addLine = async (payload: Record<string, unknown>) => {
-    const ok = await run(() => api.addLine(detail.id, payload), "Ligne ajoutÃ©e.");
+    const ok = await run(() => api.addLine(detail.id, payload), "Ligne ajoutée.");
     if (ok) setAddOpen(false);
     return ok;
   };
@@ -447,13 +493,13 @@ export function LinesEditor({
           <div>
             <h2>Lignes de facture</h2>
             <p className="muted small">
-              {detail.lines.length} ligne{detail.lines.length > 1 ? "s" : ""} Â· corrigez les quantitÃ©s, prix, remises et
+              {detail.lines.length} ligne{detail.lines.length > 1 ? "s" : ""} · corrigez les quantités, prix, remises et
               rapprochez chaque article Tulip.
             </p>
           </div>
           <div className="panel-actions">
             <span className="muted small nowrap">
-              Total lignes calculÃ© : <strong className="mono">{formatMoney(calculatedSum, detail.currency)}</strong>
+              Total lignes calculé : <strong className="mono">{formatMoney(calculatedSum, detail.currency)}</strong>
             </span>
             {!readOnly && (
               <button type="button" className="button button-sm" onClick={() => setAddOpen(true)}>
@@ -468,12 +514,13 @@ export function LinesEditor({
             <thead>
               <tr>
                 <th className="col-pos">#</th>
-                <th className="col-ref">RÃ©f.</th>
-                <th className="col-designation">DÃ©signation</th>
+                <th className="col-ref">Réf.</th>
+                <th className="col-designation">Désignation</th>
                 <th className="col-lot">Lot</th>
                 <th className="col-num">Colis</th>
-                <th className="col-num">QtÃ©</th>
+                <th className="col-num">Qté</th>
                 <th className="col-money">PU HT</th>
+                <th className="col-money">Prix vente</th>
                 <th className="col-num">Remise</th>
                 <th className="col-num">TVA %</th>
                 <th className="col-money">Total HT</th>
@@ -484,9 +531,9 @@ export function LinesEditor({
             <tbody>
               {detail.lines.length === 0 ? (
                 <tr>
-                  <td colSpan={12}>
+                  <td colSpan={13}>
                     <div className="table-empty">
-                      <p>Aucune ligne dÃ©tectÃ©e.</p>
+                      <p>Aucune ligne détectée.</p>
                       {!readOnly && (
                         <button type="button" className="button button-sm" onClick={() => setAddOpen(true)}>
                           Ajouter manuellement une ligne
@@ -498,12 +545,13 @@ export function LinesEditor({
               ) : (
                 detail.lines.map((line) => (
                   <LineRow
-                    key={`${line.id}-${line.user_modified}-${line.raw_designation}-${line.quantity}-${line.unit_price_ht}-${line.line_total_ht_extracted}`}
+                    key={line.id}
                     line={line}
                     currency={detail.currency}
                     readOnly={readOnly}
                     selected={selectedLineId === line.id}
                     saving={savingId === line.id}
+                    supplierId={detail.supplier?.id ?? null}
                     suggestions={suggestions[line.id] ?? line.match_candidates ?? []}
                     suggestionsLoading={suggestionsLoading && !(suggestions[line.id] ?? line.match_candidates ?? []).length}
                     onSelect={() => onSelectLine(line)}
@@ -543,7 +591,7 @@ export function LinesEditor({
       <Modal
         open={deleteTarget !== null}
         title="Supprimer la ligne ?"
-        subtitle={deleteTarget ? `Ligne ${deleteTarget.position} â€” ${deleteTarget.raw_designation}` : undefined}
+        subtitle={deleteTarget ? `Ligne ${deleteTarget.position} — ${deleteTarget.raw_designation}` : undefined}
         onClose={() => setDeleteTarget(null)}
         footer={
           <>
@@ -557,7 +605,7 @@ export function LinesEditor({
         }
       >
         <p className="muted">
-          La suppression est enregistrÃ©e dans l'historique. Les totaux et contrÃ´les seront recalculÃ©s immÃ©diatement.
+          La suppression est enregistrée dans l'historique. Les totaux et contrôles seront recalculés immédiatement.
         </p>
       </Modal>
     </>
@@ -590,12 +638,12 @@ function AddLineModal({
 
   const submit = async () => {
     if (!draft.raw_designation.trim()) {
-      setError("La dÃ©signation est obligatoire.");
+      setError("La désignation est obligatoire.");
       return;
     }
     for (const key of ["packages", "quantity", "unit_price_ht", "vat_rate", "line_total_ht_extracted"] as const) {
       if (draft[key].trim() !== "" && parseAmount(draft[key]) === null) {
-        setError("Une valeur numÃ©rique est invalide.");
+        setError("Une valeur numérique est invalide.");
         return;
       }
     }
@@ -610,16 +658,23 @@ function AddLineModal({
       line_total_ht_extracted: numberOrNull(draft.line_total_ht_extracted),
     };
     setSaving(true);
+    setError(null);
     const ok = await onSubmit(payload);
     setSaving(false);
-    if (!ok) setError("L'ajout a Ã©chouÃ©.");
+    if (ok) {
+      // Réinitialiser le formulaire après succès
+      setDraft(emptyAdd);
+      setError(null);
+    } else {
+      setError("L'ajout a échoué. Veuillez réessayer.");
+    }
   };
 
   return (
     <Modal
       open={open}
       title="Ajouter une ligne"
-      subtitle="Saisie manuelle. L'article pourra Ãªtre rapprochÃ© juste aprÃ¨s."
+      subtitle="Saisie manuelle. L'article pourra être rapproché juste après."
       onClose={onClose}
       wide
       footer={
@@ -635,11 +690,11 @@ function AddLineModal({
     >
       <div className="form-grid">
         <label className="field">
-          <span>RÃ©fÃ©rence</span>
+          <span>Référence</span>
           <input value={draft.raw_reference} onChange={(event) => set("raw_reference", event.target.value)} />
         </label>
         <label className="field">
-          <span>DÃ©signation *</span>
+          <span>Désignation *</span>
           <input value={draft.raw_designation} onChange={(event) => set("raw_designation", event.target.value)} />
         </label>
         <label className="field">
@@ -651,7 +706,7 @@ function AddLineModal({
           <input inputMode="decimal" value={draft.packages} onChange={(event) => set("packages", event.target.value)} />
         </label>
         <label className="field">
-          <span>QuantitÃ©</span>
+          <span>Quantité</span>
           <input inputMode="decimal" value={draft.quantity} onChange={(event) => set("quantity", event.target.value)} />
         </label>
         <label className="field">
@@ -693,6 +748,8 @@ function ProductMatchModal({
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<number | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!line) return;
@@ -703,7 +760,7 @@ function ProductMatchModal({
       if ((line.match_candidates ?? []).length > 0) return;
       setLoading(true);
       try {
-        const result = await api.suggestProducts(line.raw_designation, supplierId);
+        const result = await api.suggestProducts(line.raw_designation, supplierId, line.raw_reference);
         setCandidates(result.items);
       } catch {
         setCandidates([]);
@@ -719,13 +776,62 @@ function ProductMatchModal({
     setSearching(true);
     setError(null);
     try {
-      const result = await api.suggestProducts(query.trim(), supplierId);
+      const result = await api.suggestProducts(query.trim(), supplierId, line?.raw_reference);
       setCandidates(result.items);
-      if (result.items.length === 0) setError("Aucun article ne correspond. VÃ©rifiez le rÃ©fÃ©rentiel articles.");
+      if (result.items.length === 0) setError("Aucun article ne correspond. Vérifiez le référentiel articles.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Recherche impossible.");
     } finally {
       setSearching(false);
+    }
+  };
+
+  const scanBarcode = async (barcode: string) => {
+    setScanning(true);
+    setScanError(null);
+    try {
+      const product = await api.getProductByBarcode(barcode);
+      const candidate: ProductCandidate = {
+        product_id: product.id,
+        tulip_code: product.tulip_code,
+        designation: product.designation,
+        reference: product.reference,
+        supplier_ref: product.supplier_ref,
+        barcode: product.barcode,
+        packaging: product.packaging,
+        stock_unit: product.stock_unit,
+        default_vat_rate: product.default_vat_rate !== null ? String(product.default_vat_rate) : null,
+        score: 1,
+        method: "code-barres scanné",
+      };
+      setCandidates((current) => [
+        candidate,
+        ...current.filter((item) => item.product_id !== product.id),
+      ]);
+    } catch (err) {
+      // Repli : le produit existe peut-être sous un autre identifiant (code Tulip ou réf. fournisseur).
+      try {
+        const result = await api.suggestProducts(barcode);
+        if (result.items.length > 0) {
+          setCandidates((current) => [
+            ...result.items.filter((item) => !current.some((c) => c.product_id === item.product_id)),
+            ...current,
+          ]);
+          return;
+        }
+      } catch {
+        setScanError(`Aucun article avec le code-barres ${barcode}.`);
+        return;
+      }
+      setScanError(
+        err instanceof ApiError && err.status === 404
+          ? `Aucun article avec le code-barres ${barcode}.`
+          : err instanceof Error
+            ? err.message
+            : "Recherche impossible.",
+      );
+    } finally {
+      setScanning(false);
     }
   };
 
@@ -742,7 +848,7 @@ function ProductMatchModal({
     <Modal
       open={line !== null}
       title="Rapprocher un article Tulip"
-      subtitle={line ? `Ligne ${line.position} â€” ${line.raw_designation}` : undefined}
+      subtitle={line ? `Ligne ${line.position} — ${line.raw_designation}` : undefined}
       onClose={onClose}
       wide
       footer={
@@ -763,7 +869,7 @@ function ProductMatchModal({
                 void search();
               }
             }}
-            placeholder="RÃ©fÃ©rence, code-barres, code Tulip ou dÃ©signation"
+            placeholder="Référence, code-barres, code Tulip ou désignation"
           />
         </div>
         <button type="button" className="button" onClick={search} disabled={searching}>
@@ -771,16 +877,19 @@ function ProductMatchModal({
         </button>
       </div>
 
+      <BarcodeScanInput onScan={scanBarcode} busy={scanning} placeholder="Scanner l'article avec la douchette…" />
+      {scanError && <p className="inline-error">{scanError}</p>}
+
       {line?.raw_reference && (
         <p className="muted small">
-          RÃ©fÃ©rence fournisseur : <span className="mono">{line.raw_reference}</span>
+          Référence fournisseur : <span className="mono">{line.raw_reference}</span>
         </p>
       )}
 
       {loading ? (
-        <p className="muted small">Recherche de suggestionsâ€¦</p>
+        <p className="muted small">Recherche de suggestions…</p>
       ) : candidates.length === 0 ? (
-        <p className="muted small">Aucun candidat. Lancez une recherche ou complÃ©tez le rÃ©fÃ©rentiel articles.</p>
+        <p className="muted small">Aucun candidat. Lancez une recherche ou complétez le référentiel articles.</p>
       ) : (
         <ul className="candidate-list">
           {candidates.map((candidate) => (
@@ -789,9 +898,15 @@ function ProductMatchModal({
                 <span className="product-code mono">{candidate.tulip_code}</span>
                 <strong>{candidate.designation}</strong>
                 <span className="muted small">
-                  {[candidate.packaging, candidate.stock_unit, candidate.supplier_ref ? `rÃ©f. ${candidate.supplier_ref}` : null]
+                  {[
+                    candidate.reference ? `réf. art. ${candidate.reference}` : null,
+                    candidate.supplier_ref ? `réf. four. ${candidate.supplier_ref}` : null,
+                    candidate.barcode ? `code-barres ${candidate.barcode}` : null,
+                    candidate.packaging,
+                    candidate.stock_unit,
+                  ]
                     .filter(Boolean)
-                    .join(" Â· ")}
+                    .join(" · ")}
                 </span>
               </div>
               <div className="candidate-side">
@@ -813,12 +928,12 @@ function ProductMatchModal({
       )}
       {error && <p className="inline-error">{error}</p>}
       <p className="muted tiny">
-        L'association confirme le rapprochement pour cette ligne et mÃ©morise la rÃ©fÃ©rence fournisseur pour les prochains
+        L'association confirme le rapprochement pour cette ligne et mémorise la référence fournisseur pour les prochains
         imports.
       </p>
       {line?.tulip_product && (
         <p className="small">
-          Article actuellement associÃ© : <strong>{line.tulip_product.tulip_code}</strong> â€” {line.tulip_product.designation}
+          Article actuellement associé : <strong>{line.tulip_product.tulip_code}</strong> — {line.tulip_product.designation}
         </p>
       )}
     </Modal>
@@ -836,6 +951,10 @@ function NewProductModal({
 }) {
   const [designation, setDesignation] = useState("");
   const [tulipCode, setTulipCode] = useState("");
+  const [reference, setReference] = useState("");
+  const [supplierRef, setSupplierRef] = useState("");
+  const [barcode, setBarcode] = useState("");
+  const [supplierId, setSupplierId] = useState<number | null>(null);
   const [packaging, setPackaging] = useState("");
   const [stockUnit, setStockUnit] = useState("");
   const [saving, setSaving] = useState(false);
@@ -845,6 +964,10 @@ function NewProductModal({
     if (!line) return;
     setDesignation(line.raw_designation ?? "");
     setTulipCode("");
+    setReference(line.raw_reference ?? "");
+    setSupplierRef("");
+    setBarcode("");
+    setSupplierId(null);
     setPackaging(line.packages !== null ? String(line.packages) : "");
     setStockUnit("");
     setError(null);
@@ -860,6 +983,9 @@ function NewProductModal({
     const ok = await onSubmit(line, {
       designation: designation.trim(),
       tulip_code: tulipCode.trim() || null,
+      reference: reference.trim() || null,
+      supplier_ref: supplierRef.trim() || null,
+      barcode: barcode.trim() || null,
       packaging: packaging.trim() || null,
       stock_unit: stockUnit.trim() || null,
     });
@@ -884,23 +1010,55 @@ function NewProductModal({
         </>
       }
     >
-      <div className="form-grid">
+      <div className="form-stack">
         <label className="field">
           <span>Désignation *</span>
           <input value={designation} onChange={(event) => setDesignation(event.target.value)} />
         </label>
+
         <label className="field">
-          <span>Code Tulip (laisser vide = généré)</span>
-          <input value={tulipCode} onChange={(event) => setTulipCode(event.target.value)} placeholder="ex. 10698" />
+          <span>Fournisseur référent (optionnel)</span>
+          <SupplierDropdown
+            value={supplierId}
+            onChange={(id) => setSupplierId(id)}
+            disabled={saving}
+          />
+          <span className="muted tiny" style={{ display: "block", marginTop: "0.25rem" }}>
+            Sélectionnez le fournisseur principal pour cet article (facilite le rapprochement automatique)
+          </span>
         </label>
-        <label className="field">
-          <span>Conditionnement</span>
-          <input value={packaging} onChange={(event) => setPackaging(event.target.value)} placeholder="ex. 4X1" />
-        </label>
-        <label className="field">
-          <span>Unité de stock</span>
-          <input value={stockUnit} onChange={(event) => setStockUnit(event.target.value)} placeholder="ex. pièce, kg" />
-        </label>
+
+        <div className="form-grid">
+          <label className="field">
+            <span>Code Tulip (laisser vide = généré)</span>
+            <input value={tulipCode} onChange={(event) => setTulipCode(event.target.value)} placeholder="ex. 10698" />
+          </label>
+          <label className="field">
+            <span>Réf. article (Tulip)</span>
+            <input
+              value={reference}
+              onChange={(event) => setReference(event.target.value)}
+              className="mono"
+              placeholder="REF Tulip, préremplie avec la référence lue sur la facture"
+            />
+          </label>
+          <label className="field">
+            <span>Référence fournisseur</span>
+            <input value={supplierRef} onChange={(event) => setSupplierRef(event.target.value)} placeholder="Référence du fournisseur" />
+          </label>
+          <label className="field">
+            <span>Code-barres</span>
+            <input value={barcode} onChange={(event) => setBarcode(event.target.value)} className="mono" placeholder="CODEBARRE" />
+          </label>
+          <label className="field">
+            <span>Conditionnement</span>
+            <input value={packaging} onChange={(event) => setPackaging(event.target.value)} placeholder="ex. 4X1" />
+          </label>
+          <label className="field">
+            <span>Unité de stock</span>
+            <input value={stockUnit} onChange={(event) => setStockUnit(event.target.value)} placeholder="ex. pièce, kg" />
+          </label>
+        </div>
       </div>
       {error && <p className="inline-error">{error}</p>}
       <p className="muted tiny">

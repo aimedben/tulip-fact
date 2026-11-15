@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../lib/api";
-import type { ExportRecord, InvoiceDetail } from "../../types";
+import type { ExportRecord, InvoiceDetail, TulipExportResult } from "../../types";
 import { Modal } from "../Modal";
 import { CheckList } from "../Common";
 import { Icon } from "../Icon";
@@ -35,6 +35,8 @@ export function ValidationModal({
   const [error, setError] = useState<string | null>(null);
   const [issues, setIssues] = useState<{ code?: string; message?: string }[]>([]);
   const [saving, setSaving] = useState(false);
+  const [tulipResult, setTulipResult] = useState<TulipExportResult | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const { show } = useToast();
 
   useEffect(() => {
@@ -44,6 +46,8 @@ export function ValidationModal({
     setAckWarnings(false);
     setError(null);
     setIssues([]);
+    setTulipResult(null);
+    setRetrying(false);
   }, [open]);
 
   const hard = dedupeChecks(readiness.hard);
@@ -58,6 +62,7 @@ export function ValidationModal({
     setSaving(true);
     setError(null);
     setIssues([]);
+    setTulipResult(null);
     try {
       const result = await api.validateInvoice(detail.id, {
         actor: actor.trim(),
@@ -66,8 +71,16 @@ export function ValidationModal({
         acknowledge_warnings: ackWarnings,
       });
       onValidated(result.invoice);
-      show("Facture validée. Elle est désormais verrouillée pour l'export.", "success");
-      onClose();
+      if (result.tulip_export?.exported) {
+        show(
+          `Facture validée et enregistrée dans Tulip — bon d'entrée n° ${result.tulip_export.numero ?? result.tulip_export.be_code}.`,
+          "success",
+        );
+        onClose();
+      } else {
+        setTulipResult(result.tulip_export ?? { exported: false });
+        show("Facture validée, mais l'enregistrement dans Tulip a échoué.", "error");
+      }
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);
@@ -77,6 +90,25 @@ export function ValidationModal({
       }
     } finally {
       setSaving(false);
+    }
+  };
+
+  const retryTulip = async () => {
+    setRetrying(true);
+    setError(null);
+    try {
+      const result = (await api.tulipCreateBe(detail.id, false)) as {
+        be_code?: number | string;
+        numero?: number | string;
+      };
+      const updated = await api.invoice(detail.id);
+      onValidated(updated);
+      show(`Enregistrée dans Tulip — bon d'entrée n° ${result.numero ?? result.be_code}.`, "success");
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Enregistrement dans Tulip impossible.");
+    } finally {
+      setRetrying(false);
     }
   };
 
@@ -113,9 +145,25 @@ export function ValidationModal({
           <div>
             <strong>Prête à être validée</strong>
             <p>
-              La validation verrouille la facture et enregistre votre nom dans l'historique. Les totaux sont recalculés côté
-              serveur.
+              La validation enregistre la facture dans Tulip et verrouille le document. Les totaux sont recalculés
+              automatiquement.
             </p>
+          </div>
+        </div>
+      )}
+
+      {tulipResult && !tulipResult.exported && (
+        <div className="banner banner-danger">
+          <Icon name="alert" size={18} />
+          <div>
+            <strong>La facture n'a pas été enregistrée dans Tulip</strong>
+            <p>
+              {tulipResult.error ??
+                "Tulip n'a pas pu être joint. La facture reste validée dans l'application."}
+            </p>
+            <button type="button" className="button" onClick={retryTulip} disabled={retrying}>
+              {retrying ? <span className="spinner small" /> : <Icon name="refresh" size={16} />} Réessayer l'enregistrement
+            </button>
           </div>
         </div>
       )}

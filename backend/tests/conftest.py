@@ -7,6 +7,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEST_DATA = Path(tempfile.mkdtemp(prefix="tulip-factures-tests-"))
 os.environ["TULIP_APP_MODE"] = "production"
+os.environ["TULIP_ALLOW_CREATE_DB"] = "1"
 os.environ["TULIP_DATA_DIR"] = str(TEST_DATA)
 os.environ["TULIP_DISABLE_WORKER"] = "1"
 os.environ["TULIP_LLM_ENABLED"] = "false"

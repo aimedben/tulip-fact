@@ -15,6 +15,7 @@ Write-Host "Creation du script launcher..." -ForegroundColor Yellow
 
 $launcherScript = @'
 import os
+import socket
 import sys
 import subprocess
 import tkinter as tk
@@ -30,6 +31,16 @@ class TulipLauncher:
         self.venv_python = self.app_dir / ".venv" / "Scripts" / "python.exe"
         self.process = None
 
+    def lan_ip(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+        except OSError:
+            return "127.0.0.1"
+        finally:
+            sock.close()
+
     def check_requirements(self):
         issues = []
         if not self.venv_python.exists():
@@ -40,14 +51,39 @@ class TulipLauncher:
             return False, "\n\n".join(issues)
         return True, ""
 
+    def ensure_firewall(self):
+        script = self.app_dir / "autoriser-telephone.ps1"
+        if not script.exists():
+            return
+        try:
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+        except OSError:
+            pass
+
+    def server_already_running(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        try:
+            return sock.connect_ex(("127.0.0.1", 8000)) == 0
+        finally:
+            sock.close()
+
     def start_server(self, demo=False):
+        self.ensure_firewall()
+        if self.server_already_running():
+            webbrowser.open("http://127.0.0.1:8000")
+            return
+
         env = os.environ.copy()
         env["TULIP_APP_MODE"] = "demo" if demo else "production"
 
         if demo:
             subprocess.run([str(self.venv_python), "-m", "app.demo"], cwd=str(self.backend_dir), env=env)
 
-        cmd = [str(self.venv_python), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"]
+        cmd = [str(self.venv_python), "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
         self.process = subprocess.Popen(cmd, cwd=str(self.backend_dir), env=env,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -58,7 +94,7 @@ class TulipLauncher:
     def create_gui(self):
         root = tk.Tk()
         root.title("Tulip Factures")
-        root.geometry("400x250")
+        root.geometry("420x300")
         root.resizable(False, False)
         root.eval('tk::PlaceWindow . center')
 
@@ -69,7 +105,10 @@ class TulipLauncher:
         title.pack(pady=(0, 10))
 
         subtitle = tk.Label(frame, text="Gestion des factures fournisseurs", font=("Arial", 10), fg="#666")
-        subtitle.pack(pady=(0, 20))
+        subtitle.pack(pady=(0, 10))
+
+        phone = tk.Label(frame, text=f"Telephone : http://{self.lan_ip()}:8000", font=("Arial", 9), fg="#2563eb")
+        phone.pack(pady=(0, 10))
 
         ok, error = self.check_requirements()
 
@@ -112,7 +151,8 @@ class TulipLauncher:
             mode = "DEMO" if demo else "production"
             messagebox.showinfo("Application demarree",
                               f"Tulip Factures demarree en mode {mode}.\n\n"
-                              f"URL: http://127.0.0.1:8000\n\n"
+                              f"PC : http://127.0.0.1:8000\n"
+                              f"Telephone : http://{self.lan_ip()}:8000\n\n"
                               f"Fermez cette fenetre pour arreter.")
         except Exception as e:
             messagebox.showerror("Erreur", f"Impossible de demarrer:\n\n{e}")

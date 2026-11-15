@@ -15,6 +15,7 @@ class OcrLine:
     bbox: dict[str, float] | None = None
     confidence: float | None = None
     words: list[dict[str, Any]] = field(default_factory=list)
+    source: str | None = None
 
 
 @dataclass
